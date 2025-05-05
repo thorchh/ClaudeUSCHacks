@@ -35,7 +35,7 @@ def run_claude_tool(tool_name, tool_schema, query):
             return content.input
     return {}
 
-# === Step 2: Extract Emergent Themes ===
+# === Step 1: Intake ===
 theme_tool = [{
     "name": "extract_themes",
     "description": "Extracts key themes from freewriting.",
@@ -64,7 +64,6 @@ themes = run_claude_tool(
 )
 print("Emergent Themes:\n", themes)
 
-# === Step 3: Context Intake Agent ===
 context_tool = [{
     "name": "intake_context",
     "description": "Captures basic context about the user's intent and background.",
@@ -93,7 +92,6 @@ Now use the `intake_context` tool to summarize goal, audience, and constraints.
 )
 print("Structured Context:\n", context_input)
 
-# === Step 3.1: Concept Clarification Agent ===
 clarification_tool = [{
     "name": "clarify_concept",
     "description": "Parses keywords, objectives, assumptions, and checks for missing detail.",
@@ -124,7 +122,6 @@ Use the `clarify_concept` tool to respond.
 )
 print("Concept Clarification:\n", json.dumps(clarification, indent=2))
 
-# === Hard‑coded detail answer for testing ===
 if clarification.get("need_more_detail"):
     default_detail_answer = (
         "Use sender role, keywords, and explicit deadline dates to determine urgency."
@@ -133,7 +130,7 @@ if clarification.get("need_more_detail"):
 else:
     default_detail_answer = ""
 
-# === Step 4: Constructive Pushback & Curiosity-Driven Follow-up ===
+# === Step 2: Initial Pushback (user can respond) ===
 constructive_pushback_tool = [{
     "name": "constructive_pushback",
     "description": "Summarizes key risks and blindspots, then generates a supportive follow-up question.",
@@ -165,28 +162,12 @@ Use the `constructive_pushback` tool to respond.
 print("\nPushback Summary:\n", pushback["summary_of_pushback"])
 print("\nCuriosity-Driven Question:\n", pushback["curiosity_question"])
 
-# === Hard‑coded pushback response for testing ===
 default_pushback_response = (
     "I think Google integration is most critical, and AI-driven onboarding will minimize user effort."
 )
 print("\nUsing default_pushback_response:", default_pushback_response)
 
-# === Step 5: Feasibility Scoring Agent ===
-feasibility_tool = [{
-    "name": "score_feasibility",
-    "description": "Scores feasibility of an idea given context and constraints.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "technical_feasibility": {"type": "number"},
-            "market_feasibility": {"type": "number"},
-            "novelty": {"type": "number"},
-            "execution_risks": {"type": "string"}
-        },
-        "required": ["technical_feasibility", "market_feasibility", "novelty", "execution_risks"]
-    }
-}]
-
+# Define combined_context before using it in creativity/cross-pollination steps
 combined_context = {
     "context": context_input,
     "clarification": clarification,
@@ -196,21 +177,31 @@ combined_context = {
     "pushback_response": default_pushback_response
 }
 
-feasibility = run_claude_tool(
-    "score_feasibility",
-    feasibility_tool,
-    f"""Score the feasibility of developing a 'smart feedback inbox' system as described.
+# === Step 2.5: Generate Core Problem Statement with Claude ===
+core_problem_tool = [{
+    "name": "summarize_core_problem",
+    "description": "Summarizes the core problem, user pain, and constraints in a concise, actionable way for use in downstream prompts.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "core_problem": {"type": "string"}
+        },
+        "required": ["core_problem"]
+    }
+}]
 
-<context>
-{json.dumps(combined_context, indent=2)}
-</context>
+core_problem_result = run_claude_tool(
+    "summarize_core_problem",
+    core_problem_tool,
+    f"""Given the following context and clarification, summarize the core problem, user pain, and constraints in a concise, actionable way. This summary will be used to anchor all downstream idea generation prompts, so make it practical and specific to the user's needs.
 
-Use the `score_feasibility` tool to return scores and risks.
+<context>\n{json.dumps(context_input, indent=2)}\n</context>
+<clarification>\n{json.dumps(clarification, indent=2)}\n</clarification>
 """
 )
-print("Feasibility Scores:\n", json.dumps(feasibility, indent=2))
+core_problem = core_problem_result["core_problem"]
 
-# === Step 6: Meta-Analytic Creativity Layer ===
+# === Step 3: Creativity Layer + Cross-Pollination ===
 meta_creativity_tool = [{
     "name": "meta_creativity",
     "description": "Applies SCAMPER, first principles, phenomenological inquiry, and Six Thinking Hats.",
@@ -240,22 +231,22 @@ meta_creativity_tool = [{
 creative_expansion = run_claude_tool(
     "meta_creativity",
     meta_creativity_tool,
-    f"""You are a meta-creative agent. Expand the idea using:
-- SCAMPER
+    f"""You are a meta-creative agent. Expand on the original idea below, but do NOT stray from the core problem:
+{core_problem}
+
+Apply each of the following frameworks to generate practical, actionable, and relevant variations or insights for the original feedback management problem:
+- SCAMPER (Substitute, Combine, Adapt, Modify, Put to another use, Eliminate, Reverse)
 - First Principles decomposition
-- Phenomenological inquiry into the user's experience
-- Six Thinking Hats summary
+- Phenomenological inquiry (describe the user's lived experience and pain)
+- Six Thinking Hats (summarize the idea from each hat's perspective)
 
-<context>
-{json.dumps(combined_context, indent=2)}
-</context>
+All outputs must be tightly relevant to the user's context and pain points.
 
-Use the `meta_creativity` tool to respond.
+<context>\n{json.dumps(combined_context, indent=2)}\n</context>
 """
 )
-print("\nMeta-Creativity Output:\n", json.dumps(creative_expansion, indent=2))
+creative_variants = creative_expansion.get("scamper_variations", [])
 
-# === Step 7: Cross-Pollination & Analogical Mutation ===
 cross_pollination_tool = [{
     "name": "cross_pollination",
     "description": "Generates analogical and hybrid idea mutations.",
@@ -274,17 +265,79 @@ cross_pollination_tool = [{
 cross_analogs = run_claude_tool(
     "cross_pollination",
     cross_pollination_tool,
-    f"""Fuse the 'smart feedback inbox' idea with:
-- 5 cross-industry analogies
-- Hybrid concept proposals
-- Meta-trend inspirations (e.g., async collaboration, quantified self)
-- Remixed business model patterns
+    f"""You are an innovation agent. Using the core problem below, generate practical, actionable, and relevant idea variants for feedback management by:
+- Drawing analogies from other industries (cross-industry analogies)
+- Proposing hybrid concepts that combine the original idea with proven solutions from other domains
+- Applying meta-trend inspirations (e.g., async collaboration, quantified self, etc.)
+- Remixing business model patterns
 
-<context>
-{json.dumps(combined_context, indent=2)}
-</context>
+All outputs must be tightly relevant to the user's context and pain points, and should not stray from the core problem.
 
-Use the `cross_pollination` tool to respond.
+<context>\n{json.dumps(combined_context, indent=2)}\n</context>
+<core_problem>\n{core_problem}\n</core_problem>
 """
 )
-print("\nCross-Pollination Output:\n", json.dumps(cross_analogs, indent=2))
+cross_variants = cross_analogs.get("hybrid_concepts", [])
+
+all_idea_variants = creative_variants + cross_variants
+
+feasibility_tool = [{
+    "name": "score_feasibility",
+    "description": "Scores feasibility of an idea given context and constraints.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "technical_feasibility": {"type": "number"},
+            "market_feasibility": {"type": "number"},
+            "novelty": {"type": "number"},
+            "execution_risks": {"type": "string"}
+        },
+        "required": ["technical_feasibility", "market_feasibility", "novelty", "execution_risks"]
+    }
+}]
+
+# === Step 4: Pushback + Feasibility for Each Variant ===
+variant_results = []
+for idx, idea in enumerate(all_idea_variants):
+    # Pushback (for display only)
+    variant_pushback = run_claude_tool(
+        "constructive_pushback",
+        constructive_pushback_tool,
+        f"""Given the following idea variant, summarize the most important risks or blindspots (1–2 sentences), then ask a curiosity-driven question (for display only, not for user response).
+
+<idea>\n{idea}\n</idea>
+"""
+    )
+    # Feasibility
+    variant_context = {
+        "context": context_input,
+        "clarification": clarification,
+        "detail_answer": default_detail_answer,
+        "idea_variant": idea
+    }
+    variant_feasibility = run_claude_tool(
+        "score_feasibility",
+        feasibility_tool,
+        f"""Score the feasibility of the following idea variant.
+
+<context>\n{json.dumps(variant_context, indent=2)}\n</context>
+<idea>\n{idea}\n</idea>
+"""
+    )
+    variant_results.append({
+        "idea": idea,
+        "pushback": variant_pushback,
+        "feasibility": variant_feasibility
+    })
+
+# === Step 5: Present All Ideas for User Selection ===
+print("\nIDEA VARIANTS WITH PUSHBACK & FEASIBILITY:\n")
+for idx, result in enumerate(variant_results):
+    print(f"[{idx+1}] Idea: {result['idea']}")
+    print(f"    Pushback: {result['pushback']['summary_of_pushback']}")
+    print(f"    Feasibility: {json.dumps(result['feasibility'], indent=2)}\n")
+
+selected_idx = int(input("Select the number of the idea you want to continue with: ")) - 1
+selected_idea = variant_results[selected_idx]['idea']
+print(f"\nYou selected: {selected_idea}\n")
+# ...continue with next round as needed...
