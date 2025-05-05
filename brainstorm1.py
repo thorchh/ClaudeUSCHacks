@@ -242,10 +242,13 @@ Apply each of the following frameworks to generate practical, actionable, and re
 
 All outputs must be tightly relevant to the user's context and pain points.
 
+Limit the number of SCAMPER variations to 3.
+
+For each SCAMPER variation, use structured chain-of-thought reasoning. Output your reasoning in <thinking> tags and the final idea in <answer> tags. Think step-by-step, breaking down the problem and solution in detail.
+
 <context>\n{json.dumps(combined_context, indent=2)}\n</context>
 """
 )
-creative_variants = creative_expansion.get("scamper_variations", [])
 
 cross_pollination_tool = [{
     "name": "cross_pollination",
@@ -273,10 +276,16 @@ cross_analogs = run_claude_tool(
 
 All outputs must be tightly relevant to the user's context and pain points, and should not stray from the core problem.
 
+Limit the number of hybrid concepts to 3.
+
+For each hybrid concept, use structured chain-of-thought reasoning. Output your reasoning in <thinking> tags and the final idea in <answer> tags. Think step-by-step, breaking down the problem and solution in detail.
+
 <context>\n{json.dumps(combined_context, indent=2)}\n</context>
 <core_problem>\n{core_problem}\n</core_problem>
 """
 )
+
+creative_variants = creative_expansion.get("scamper_variations", [])
 cross_variants = cross_analogs.get("hybrid_concepts", [])
 
 all_idea_variants = creative_variants + cross_variants
@@ -392,7 +401,7 @@ for round_num in range(1, 4):
 Here is anonymized feedback from other agents:
 {json.dumps(other_feedback, indent=2)}
 
-At the start of this round, review all critiques and new evidence. Use chain-of-thought reasoning to explain your logic and how you arrived at your position. If your vote or weight does not change, you must justify why. If you do change, explain what specifically caused the change. Only assign a high empirical weight if you cite concrete data, studies, or real-world examples; otherwise, use a lower weight. Do not default to 7 or 0.8—your score should reflect your true, updated position. Output a short 'change_log' describing any change in your vote/weight and why it happened (or why it did not). Output your full chain of thought as 'chain_of_thought'.
+At the start of this round, review all critiques and new evidence. Use structured chain-of-thought reasoning: output your step-by-step thinking in <thinking> tags and your final position in <answer> tags. If your vote or weight does not change, you must justify why. If you do change, explain what specifically caused the change. Only assign a high empirical weight if you cite concrete data, studies, or real-world examples; otherwise, use a lower weight. Do not default to 7 or 0.8—your score should reflect your true, updated position. Output a short 'change_log' describing any change in your vote/weight and why it happened (or why it did not). Output your full chain of thought as 'chain_of_thought'.
 """
         agent_output = run_claude_tool(
             "agent_debate_round",
