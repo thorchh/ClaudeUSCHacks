@@ -485,7 +485,7 @@ print("\n=== Feature Ideation & Prioritization ===\n", json.dumps(feature_ideati
 # === Step 8: Competitive & Gap Analysis ===
 competitive_intel_tool = [{
     "name": "competitive_intelligence",
-    "description": "Maps competitors, blue ocean gaps, SWOT, highlights underserved segments, emerging players, and patent overlaps.",
+    "description": "Maps competitors, blue ocean gaps, SWOT, highlights underserved segments, emerging players.",
     "input_schema": {
         "type": "object",
         "properties": {
@@ -494,10 +494,9 @@ competitive_intel_tool = [{
             "blue_ocean_gaps": {"type": "array", "items": {"type": "string"}},
             "swot_profiles": {"type": "array", "items": {"type": "string"}},
             "underserved_segments": {"type": "array", "items": {"type": "string"}},
-            "emerging_players": {"type": "array", "items": {"type": "string"}},
-            "patent_overlaps": {"type": "array", "items": {"type": "string"}}
+            "emerging_players": {"type": "array", "items": {"type": "string"}}
         },
-        "required": ["direct_competitors", "indirect_competitors", "blue_ocean_gaps", "swot_profiles", "underserved_segments", "emerging_players", "patent_overlaps"]
+        "required": ["direct_competitors", "indirect_competitors", "blue_ocean_gaps", "swot_profiles", "underserved_segments", "emerging_players"]
     }
 }]
 
@@ -505,10 +504,12 @@ competitive_analysis = run_claude_tool(
     "competitive_intelligence",
     competitive_intel_tool,
     f"""You are a Competitive Intelligence Agent. Given all previous context, debate results, and feature ideation, map:
-- Direct and indirect competitors
-- Blue Ocean gaps
-- SWOT profiles
-- Underserved segments, emerging players, patent overlaps
+- 3-6 direct and indirect competitors
+- 3-6 Blue Ocean gaps
+- 3-6 SWOT profiles
+- 3-6 underserved segments and emerging players
+
+Be concise and to the point. Do not include patent overlaps. Only include the most relevant examples for each category.
 
 <context>\n{json.dumps(combined_context, indent=2)}\n</context>
 <debate_results>\n{json.dumps(agent_states, indent=2)}\n</debate_results>
@@ -552,6 +553,20 @@ print("\n=== MVP Design & Execution Blueprint ===\n", json.dumps(mvp_roadmap, in
 
 # === Final Report ===
 print("\n=== FINAL REPORT ===\n")
-print("\n--- Feature Ideation & Prioritization ---\n", json.dumps(feature_ideation, indent=2))
-print("\n--- Competitive & Gap Analysis ---\n", json.dumps(competitive_analysis, indent=2))
+print("\n--- Feature Ideation & Prioritization (Top 3-6) ---\n", json.dumps({
+    'must_have_features': feature_ideation['must_have_features'][:6],
+    'nice_to_have_features': feature_ideation['nice_to_have_features'][:6],
+    'feasibility_notes': feature_ideation['feasibility_notes'],
+    'technical_complexity': feature_ideation['technical_complexity'],
+    'cost_time_estimates': feature_ideation['cost_time_estimates'],
+    'feature_pivots': feature_ideation['feature_pivots'][:6]
+}, indent=2))
+print("\n--- Competitive & Gap Analysis (Top 3-6) ---\n", json.dumps({
+    'direct_competitors': competitive_analysis['direct_competitors'][:6],
+    'indirect_competitors': competitive_analysis['indirect_competitors'][:6],
+    'blue_ocean_gaps': competitive_analysis['blue_ocean_gaps'][:6],
+    'swot_profiles': competitive_analysis['swot_profiles'][:6],
+    'underserved_segments': competitive_analysis['underserved_segments'][:6],
+    'emerging_players': competitive_analysis['emerging_players'][:6]
+}, indent=2))
 print("\n--- MVP Design & Execution Blueprint ---\n", json.dumps(mvp_roadmap, indent=2))
