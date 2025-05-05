@@ -340,4 +340,209 @@ for idx, result in enumerate(variant_results):
 selected_idx = int(input("Select the number of the idea you want to continue with: ")) - 1
 selected_idea = variant_results[selected_idx]['idea']
 print(f"\nYou selected: {selected_idea}\n")
-# ...continue with next round as needed...
+
+# === Step 6: Multi-Agent Dialectical Debate (Delphi-Style) ===
+
+# Define agent roles and modular agent logic
+AGENT_ROLES = [
+    "Market Agent",
+    "Feature Agent",
+    "Synthesis Agent",
+    "Contrarian Agent",
+    "Fusion Agent"
+]
+
+AGENT_PROMPTS = {
+    "Market Agent": "You are the Market Agent. Your job is to analyze the idea from a market and adoption perspective. Consider user demand, market size, competition, and go-to-market risks. Present your findings, critique others' logic, and vote on tradeoffs (1-10, higher is better). Weight your arguments based on empirical support.",
+    "Feature Agent": "You are the Feature Agent. Your job is to analyze the idea from a product and feature perspective. Consider technical feasibility, feature set, user experience, and implementation complexity. Present your findings, critique others' logic, and vote on tradeoffs (1-10, higher is better). Weight your arguments based on empirical support.",
+    "Synthesis Agent": "You are the Synthesis Agent. Your job is to integrate and balance the perspectives of all other agents, seeking a holistic and pragmatic solution. Present your findings, critique others' logic, and vote on tradeoffs (1-10, higher is better). Weight your arguments based on empirical support.",
+    "Contrarian Agent": "You are the Contrarian Agent. Your job is to challenge assumptions, surface blindspots, and identify risks or overlooked downsides. Present your findings, critique others' logic, and vote on tradeoffs (1-10, higher is better). Weight your arguments based on empirical support.",
+    "Fusion Agent": "You are the Fusion Agent. Your job is to propose creative integrations, hybrid solutions, or novel combinations based on the debate. Present your findings, critique others' logic, and vote on tradeoffs (1-10, higher is better). Weight your arguments based on empirical support."
+}
+
+agent_debate_tool = [{
+    "name": "agent_debate_round",
+    "description": "Each agent presents findings, critiques others, and votes on tradeoffs. Arguments are weighted by empirical support. Agents must use chain-of-thought reasoning, justify any change or lack of change in their vote/weight, and explicitly reference critiques or evidence that influenced their position.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "agent_name": {"type": "string"},
+            "insight": {"type": "string"},
+            "critiques": {"type": "array", "items": {"type": "string"}},
+            "vote": {"type": "number"},
+            "empirical_weight": {"type": "number"},
+            "change_log": {"type": "string"},
+            "chain_of_thought": {"type": "string"}
+        },
+        "required": ["agent_name", "insight", "critiques", "vote", "empirical_weight", "change_log", "chain_of_thought"]
+    }
+}]
+
+# Store agent states for each round
+agent_states = {role: {} for role in AGENT_ROLES}
+
+for round_num in range(1, 4):
+    print(f"\n=== Debate Round {round_num} ===\n")
+    round_outputs = {}
+    for agent in AGENT_ROLES:
+        other_feedback = [agent_states[other]["insight"] for other in AGENT_ROLES if other != agent and "insight" in agent_states[other]]
+        debate_prompt = f"""{AGENT_PROMPTS[agent]}
+\nDebate the following idea:
+<idea>\n{selected_idea}\n</idea>
+Here is anonymized feedback from other agents:
+{json.dumps(other_feedback, indent=2)}
+
+At the start of this round, review all critiques and new evidence. Use chain-of-thought reasoning to explain your logic and how you arrived at your position. If your vote or weight does not change, you must justify why. If you do change, explain what specifically caused the change. Only assign a high empirical weight if you cite concrete data, studies, or real-world examples; otherwise, use a lower weight. Do not default to 7 or 0.8—your score should reflect your true, updated position. Output a short 'change_log' describing any change in your vote/weight and why it happened (or why it did not). Output your full chain of thought as 'chain_of_thought'.
+"""
+        agent_output = run_claude_tool(
+            "agent_debate_round",
+            agent_debate_tool,
+            debate_prompt
+        )
+        round_outputs[agent] = agent_output
+        agent_states[agent] = agent_output
+    print(f"\n--- Round {round_num} Results ---\n")
+    for agent, output in round_outputs.items():
+        print(f"{agent}:\n  Insight: {output.get('insight', '[missing]')}\n  Critiques: {output.get('critiques', '[missing]')}\n  Vote: {output.get('vote', '[missing]')} (weight: {output.get('empirical_weight', '[missing]')})\n  Change Log: {output.get('change_log', '[missing]')}\n  Chain of Thought: {output.get('chain_of_thought', '[missing]')}\n")
+
+# === User Check-in ===
+user_confidence = int(input("On a scale of 1-5, how confident are you in the emerging results? "))
+if user_confidence < 4:
+    print("\nConfidence is low. Triggering targeted reanalysis in the next round...\n")
+    # Optionally, you could re-run the last round with a new prompt or more focus.
+    print("Re-running the last debate round with a targeted reanalysis prompt...\n")
+    targeted_prompt = "Focus specifically on the main sources of uncertainty or disagreement from previous rounds. What are the biggest unknowns or risks, and what additional evidence or clarification would help resolve them?"
+    round_outputs = {}
+    for agent in AGENT_ROLES:
+        other_feedback = [agent_states[other]["insight"] for other in AGENT_ROLES if other != agent and "insight" in agent_states[other]]
+        debate_prompt = f"""{AGENT_PROMPTS[agent]}
+\nTARGETED REANALYSIS: {targeted_prompt}
+Debate the following idea:
+<idea>\n{selected_idea}\n</idea>
+Here is anonymized feedback from other agents:
+{json.dumps(other_feedback, indent=2)}
+"""
+        agent_output = run_claude_tool(
+            "agent_debate_round",
+            agent_debate_tool,
+            debate_prompt
+        )
+        round_outputs[agent] = agent_output
+        agent_states[agent] = agent_output
+    print(f"\n--- Targeted Reanalysis Results ---\n")
+    for agent, output in round_outputs.items():
+        print(f"{agent}:\n  Insight: {output.get('insight', '[missing]')}\n  Critiques: {output.get('critiques', '[missing]')}\n  Vote: {output.get('vote', '[missing]')} (weight: {output.get('empirical_weight', '[missing]')})\n  Change Log: {output.get('change_log', '[missing]')}\n  Chain of Thought: {output.get('chain_of_thought', '[missing]')}\n")
+else:
+    print("\nDebate complete. Proceeding with synthesis of results.\n")
+
+# Synthesize final results (simple example: aggregate insights and votes)
+print("\n=== Final Synthesized Debate Results ===\n")
+for agent, output in agent_states.items():
+    print(f"{agent}:\n  Final Insight: {output.get('insight', '[missing]')}\n  Final Vote: {output.get('vote', '[missing]')} (weight: {output.get('empirical_weight', '[missing]')})\n  Change Log: {output.get('change_log', '[missing]')}\n  Chain of Thought: {output.get('chain_of_thought', '[missing]')}\n")
+
+# === Step 7: Feature Ideation & Prioritization ===
+feature_ideation_tool = [{
+    "name": "feature_ideation",
+    "description": "Generates must-have vs nice-to-have features, feasibility, technical complexity, cost/time estimates, and suggests pivots based on user feedback.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "must_have_features": {"type": "array", "items": {"type": "string"}},
+            "nice_to_have_features": {"type": "array", "items": {"type": "string"}},
+            "feasibility_notes": {"type": "string"},
+            "technical_complexity": {"type": "string"},
+            "cost_time_estimates": {"type": "string"},
+            "feature_pivots": {"type": "array", "items": {"type": "string"}}
+        },
+        "required": ["must_have_features", "nice_to_have_features", "feasibility_notes", "technical_complexity", "cost_time_estimates", "feature_pivots"]
+    }
+}]
+
+feature_ideation = run_claude_tool(
+    "feature_ideation",
+    feature_ideation_tool,
+    f"""You are a Feature Ideation Agent. Given all previous context, debate results, and user feedback, generate:
+- Must-have vs nice-to-have features
+- Feasibility & technical complexity
+- Rough cost & time estimates
+- Suggested feature pivots based on user feedback and debate
+
+<context>\n{json.dumps(combined_context, indent=2)}\n</context>
+<debate_results>\n{json.dumps(agent_states, indent=2)}\n</debate_results>
+"""
+)
+print("\n=== Feature Ideation & Prioritization ===\n", json.dumps(feature_ideation, indent=2))
+
+# === Step 8: Competitive & Gap Analysis ===
+competitive_intel_tool = [{
+    "name": "competitive_intelligence",
+    "description": "Maps competitors, blue ocean gaps, SWOT, highlights underserved segments, emerging players, and patent overlaps.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "direct_competitors": {"type": "array", "items": {"type": "string"}},
+            "indirect_competitors": {"type": "array", "items": {"type": "string"}},
+            "blue_ocean_gaps": {"type": "array", "items": {"type": "string"}},
+            "swot_profiles": {"type": "array", "items": {"type": "string"}},
+            "underserved_segments": {"type": "array", "items": {"type": "string"}},
+            "emerging_players": {"type": "array", "items": {"type": "string"}},
+            "patent_overlaps": {"type": "array", "items": {"type": "string"}}
+        },
+        "required": ["direct_competitors", "indirect_competitors", "blue_ocean_gaps", "swot_profiles", "underserved_segments", "emerging_players", "patent_overlaps"]
+    }
+}]
+
+competitive_analysis = run_claude_tool(
+    "competitive_intelligence",
+    competitive_intel_tool,
+    f"""You are a Competitive Intelligence Agent. Given all previous context, debate results, and feature ideation, map:
+- Direct and indirect competitors
+- Blue Ocean gaps
+- SWOT profiles
+- Underserved segments, emerging players, patent overlaps
+
+<context>\n{json.dumps(combined_context, indent=2)}\n</context>
+<debate_results>\n{json.dumps(agent_states, indent=2)}\n</debate_results>
+<feature_ideation>\n{json.dumps(feature_ideation, indent=2)}\n</feature_ideation>
+"""
+)
+print("\n=== Competitive & Gap Analysis ===\n", json.dumps(competitive_analysis, indent=2))
+
+# === Step 9: MVP Design & Execution Blueprint ===
+roadmap_tool = [{
+    "name": "mvp_roadmap",
+    "description": "Produces MVP architecture, implementation plan, technical validation, and collaborates with Feature Agent for realism.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "mvp_architecture": {"type": "string"},
+            "implementation_plan": {"type": "string"},
+            "technical_validation": {"type": "string"},
+            "collaboration_notes": {"type": "string"}
+        },
+        "required": ["mvp_architecture", "implementation_plan", "technical_validation", "collaboration_notes"]
+    }
+}]
+
+mvp_roadmap = run_claude_tool(
+    "mvp_roadmap",
+    roadmap_tool,
+    f"""You are a Roadmap & Action Plan Agent. Given all previous context, debate results, feature ideation, and competitive analysis, produce:
+- MVP Architecture Overview
+- Implementation plan (milestones, toolkits, hiring needs)
+- Technical validation layer
+- Collaboration notes with Feature Agent to ensure MVP realism
+
+<context>\n{json.dumps(combined_context, indent=2)}\n</context>
+<debate_results>\n{json.dumps(agent_states, indent=2)}\n</debate_results>
+<feature_ideation>\n{json.dumps(feature_ideation, indent=2)}\n</feature_ideation>
+<competitive_analysis>\n{json.dumps(competitive_analysis, indent=2)}\n</competitive_analysis>
+"""
+)
+print("\n=== MVP Design & Execution Blueprint ===\n", json.dumps(mvp_roadmap, indent=2))
+
+# === Final Report ===
+print("\n=== FINAL REPORT ===\n")
+print("\n--- Feature Ideation & Prioritization ---\n", json.dumps(feature_ideation, indent=2))
+print("\n--- Competitive & Gap Analysis ---\n", json.dumps(competitive_analysis, indent=2))
+print("\n--- MVP Design & Execution Blueprint ---\n", json.dumps(mvp_roadmap, indent=2))
