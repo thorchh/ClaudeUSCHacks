@@ -416,18 +416,19 @@ research_agents = [
     # Add more agents here (e.g., psychology, economics, technology, trends) as needed
 ]
 
-research_results = {}
-for agent in research_agents:
-    result = run_claude_tool(
-        agent["name"],
-        [agent],
-        f"""You are the {agent['name'].replace('_', ' ').title()} Agent. Given the following idea and context, perform your research and output your findings. Do not search the internet; use your own reasoning and knowledge. Be concise, relevant, and insightful.
+research_results = {agent["name"]: [] for agent in research_agents}
+for i in range(3):
+    for agent in research_agents:
+        result = run_claude_tool(
+            agent["name"],
+            [agent],
+            f"""You are the {agent['name'].replace('_', ' ').title()} Agent. Given the following idea and context, perform your research and output your top insights for this round. Do not search the internet; use your own reasoning and knowledge. Be concise, relevant, and insightful. This is round {i+1} of 3.
 
 <idea>\n{selected_idea}\n</idea>
 <context>\n{json.dumps(combined_context, indent=2)}\n</context>
 """
-    )
-    research_results[agent["name"]] = result
+        )
+        research_results[agent["name"]].append(result)
 
 print("\n=== Research Layer Results ===\n")
 for agent, result in research_results.items():
