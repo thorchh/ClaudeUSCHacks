@@ -350,6 +350,114 @@ selected_idx = int(input("Select the number of the idea you want to continue wit
 selected_idea = variant_results[selected_idx]['idea']
 print(f"\nYou selected: {selected_idea}\n")
 
+# === Step 5: Research Layer: Real-Time Knowledge Integration (after idea selection) ===
+research_agents = [
+    {
+        "name": "market_intelligence",
+        "description": "Pulls news, social sentiment, patent filings, startup funding, identifies hype/traction mismatch, under-discussed trends, and behavioral data correlations.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "news_insights": {"type": "array", "items": {"type": "string"}},
+                "social_sentiment": {"type": "array", "items": {"type": "string"}},
+                "patent_trends": {"type": "array", "items": {"type": "string"}},
+                "startup_activity": {"type": "array", "items": {"type": "string"}},
+                "hype_vs_traction": {"type": "string"},
+                "under_discussed_trends": {"type": "array", "items": {"type": "string"}},
+                "behavioral_correlations": {"type": "array", "items": {"type": "string"}}
+            },
+            "required": ["news_insights", "social_sentiment", "patent_trends", "startup_activity", "hype_vs_traction", "under_discussed_trends", "behavioral_correlations"]
+        }
+    },
+    {
+        "name": "competitive_analysis",
+        "description": "Scans for competitors, SWOT, saturation, business models, and outputs opportunity gaps with justification.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "direct_competitors": {"type": "array", "items": {"type": "string"}},
+                "indirect_competitors": {"type": "array", "items": {"type": "string"}},
+                "swot_profiles": {"type": "array", "items": {"type": "string"}},
+                "saturation_map": {"type": "string"},
+                "business_model_archetypes": {"type": "array", "items": {"type": "string"}},
+                "opportunity_gaps": {"type": "array", "items": {"type": "string"}}
+            },
+            "required": ["direct_competitors", "indirect_competitors", "swot_profiles", "saturation_map", "business_model_archetypes", "opportunity_gaps"]
+        }
+    },
+    {
+        "name": "analogical_synthesis",
+        "description": "Performs lateral ideation via cross-industry inspiration, business model remixing, metaphorical mutation, and proposes 3–5 hybrid concepts with justification.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "hybrid_concepts": {"type": "array", "items": {"type": "string"}},
+                "structure_mapping": {"type": "string"},
+                "causal_layered_analysis": {"type": "string"},
+                "justifications": {"type": "array", "items": {"type": "string"}}
+            },
+            "required": ["hybrid_concepts", "structure_mapping", "causal_layered_analysis", "justifications"]
+        }
+    },
+    {
+        "name": "contrarian_research",
+        "description": "Hunts disconfirming data: market pullbacks, critical press, early adopter resistance, ensures robustness and anti-echo-chamber integrity.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "disconfirming_data": {"type": "array", "items": {"type": "string"}},
+                "critical_press": {"type": "array", "items": {"type": "string"}},
+                "adopter_resistance": {"type": "array", "items": {"type": "string"}},
+                "robustness_notes": {"type": "string"}
+            },
+            "required": ["disconfirming_data", "critical_press", "adopter_resistance", "robustness_notes"]
+        }
+    }
+    # Add more agents here (e.g., psychology, economics, technology, trends) as needed
+]
+
+research_results = {}
+for agent in research_agents:
+    result = run_claude_tool(
+        agent["name"],
+        [agent],
+        f"""You are the {agent['name'].replace('_', ' ').title()} Agent. Given the following idea and context, perform your research and output your findings. Do not search the internet; use your own reasoning and knowledge. Be concise, relevant, and insightful.
+
+<idea>\n{selected_idea}\n</idea>
+<context>\n{json.dumps(combined_context, indent=2)}\n</context>
+"""
+    )
+    research_results[agent["name"]] = result
+
+print("\n=== Research Layer Results ===\n")
+for agent, result in research_results.items():
+    print(f"--- {agent.replace('_', ' ').title()} ---\n", json.dumps(result, indent=2))
+
+# Summarize all research results for debate context
+research_summary_tool = [{
+    "name": "summarize_research_context",
+    "description": "Summarizes all research agent findings into a concise, actionable context for debate agents.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "research_summary": {"type": "string"}
+        },
+        "required": ["research_summary"]
+    }
+}]
+
+research_summary = run_claude_tool(
+    "summarize_research_context",
+    research_summary_tool,
+    f"""Summarize the following research agent findings into a concise, actionable context for debate agents. Highlight the most important insights, risks, and opportunities relevant to the selected idea.
+
+<research_results>\n{json.dumps(research_results, indent=2)}\n</research_results>
+<idea>\n{selected_idea}\n</idea>
+"""
+)["research_summary"]
+
+# Pass summarized research into the debate agents as context
+
 # === Step 6: Multi-Agent Dialectical Debate (Delphi-Style) ===
 
 # Define agent roles and modular agent logic
@@ -398,6 +506,7 @@ for round_num in range(1, 4):
         debate_prompt = f"""{AGENT_PROMPTS[agent]}
 \nDebate the following idea:
 <idea>\n{selected_idea}\n</idea>
+<research_summary>\n{research_summary}\n</research_summary>
 Here is anonymized feedback from other agents:
 {json.dumps(other_feedback, indent=2)}
 
