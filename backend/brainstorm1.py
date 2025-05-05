@@ -525,7 +525,17 @@ At the start of this round, review all critiques and new evidence. Use structure
         print(f"{agent}:\n  Insight: {output.get('insight', '[missing]')}\n  Critiques: {output.get('critiques', '[missing]')}\n  Vote: {output.get('vote', '[missing]')} (weight: {output.get('empirical_weight', '[missing]')})\n  Change Log: {output.get('change_log', '[missing]')}\n  Chain of Thought: {output.get('chain_of_thought', '[missing]')}\n")
 
 # === User Check-in ===
-user_confidence = int(input("On a scale of 1-5, how confident are you in the emerging results? "))
+while True:
+    user_input = input("On a scale of 1-5, how confident are you in the emerging results? ")
+    try:
+        user_confidence = int(user_input)
+        if 1 <= user_confidence <= 5:
+            break
+        else:
+            print("Please enter a number between 1 and 5.")
+    except ValueError:
+        print("Please enter a valid integer between 1 and 5.")
+
 if user_confidence < 4:
     print("\nConfidence is low. Triggering targeted reanalysis in the next round...\n")
     # Optionally, you could re-run the last round with a new prompt or more focus.
