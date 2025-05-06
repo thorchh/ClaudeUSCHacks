@@ -1,4 +1,4 @@
-# BrainstormAI
+# 🧠 BrainstormAI
 
 BrainstormAI is an advanced AI-powered workflow system that transforms raw ideas into structured, validated concepts with actionable implementation plans. Perfect for entrepreneurs, product teams, innovation departments, and creative professionals looking to rapidly validate and expand ideas with AI-powered intelligence.
 
