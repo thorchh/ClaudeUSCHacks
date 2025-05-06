@@ -1,103 +1,121 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-// Mock debate data for GET
-const agents = [
-  {
-    id: "market",
-    name: "Market Agent",
-    role: "Analyzes market and adoption perspectives",
-    color: "green",
-    avatar: "MA",
-    bgColor: "bg-green-100",
-    textColor: "text-green-600",
-    sentiment: "positive",
-  },
-  {
-    id: "feature",
-    name: "Feature Agent",
-    role: "Evaluates product and technical feasibility",
-    color: "blue",
-    avatar: "FA",
-    bgColor: "bg-blue-100",
-    textColor: "text-blue-600",
-    sentiment: "neutral",
-  },
-  {
-    id: "synthesis",
-    name: "Synthesis Agent",
-    role: "Integrates perspectives for holistic solutions",
-    color: "purple",
-    avatar: "SA",
-    bgColor: "bg-purple-100",
-    textColor: "text-purple-600",
-    sentiment: "mixed",
-  },
-  {
-    id: "contrarian",
-    name: "Contrarian Agent",
-    role: "Challenges assumptions and identifies risks",
-    color: "red",
-    avatar: "CA",
-    bgColor: "bg-red-100",
-    textColor: "text-red-600",
-    sentiment: "negative",
-  },
-  {
-    id: "fusion",
-    name: "Fusion Agent",
-    role: "Proposes creative integrations and hybrid solutions",
-    color: "amber",
-    avatar: "FU",
-    bgColor: "bg-amber-100",
-    textColor: "text-amber-600",
-    sentiment: "positive",
-  },
-];
+// Define the base URL for the Python backend
+const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL || "http://127.0.0.1:5000/api/brainstorm";
 
-const topics = [
-  { id: "viability", name: "Business Viability", color: "blue", messages: [] },
-  { id: "technical", name: "Technical Feasibility", color: "purple", messages: [] },
-  { id: "market", name: "Market Potential", color: "green", messages: [] },
-  { id: "risks", name: "Risks & Challenges", color: "red", messages: [] },
-  { id: "innovation", name: "Innovation Potential", color: "amber", messages: [] },
-];
-
-// Only include round 1 for brevity; add more as needed
-const debateScript = {
-  1: [
-    {
-      id: "1-1",
-      agentId: "market",
-      content: `This feedback management solution has strong market potential. Our research indicates 78% of professionals struggle with scattered feedback across platforms. A centralized solution addresses a clear pain point with a growing TAM as remote work increases.`,
-      timestamp: new Date(),
-      keywords: ["market potential", "TAM", "remote work", "pain point"],
-      sentiment: "positive",
-      importance: 8,
-      vote: 8,
-      empiricalWeight: 0.7,
-    },
-    {
-      id: "1-2",
-      agentId: "contrarian",
-      content: `While the market need exists, we must consider integration complexity. Each platform has unique APIs and data structures. Users may resist adding \"yet another tool\" to their workflow unless the value proposition is immediately clear.`,
-      timestamp: new Date(),
-      replyTo: "1-1",
-      keywords: ["integration", "complexity", "APIs", "resistance"],
-      sentiment: "negative",
-      importance: 7,
-      vote: 6,
-      empiricalWeight: 0.8,
-    },
-    // ...add more messages as needed...
-  ],
-};
-
-export async function POST(req: NextRequest) {
-  const data = await req.json();
-  // TODO: Process debate input and update progress
-  return NextResponse.json({ message: 'Debate input received', data });
+// Define expected request body structures
+interface DebateRequestBody {
+    action: 'get_available_roles' | 'run_debate_round' | 'summarize_debate';
+    payload?: any; // Define more specific types based on action if needed
 }
 
+// Define expected payload for run_debate_round
+interface RunDebateRoundPayload {
+    selected_idea: string;
+    research_summary: string;
+    agent_role: string;
+    other_feedback?: any[];
+    round_num: number;
+}
+
+export async function POST(request: NextRequest) {
+    try {
+        const body: DebateRequestBody = await request.json();
+        const { action, payload } = body;
+
+        let endpoint = '';
+        let backendPayload: any = {};
+
+        // Map frontend actions to backend endpoints and payloads
+        switch (action) {
+            case 'get_available_roles':
+                // This action is handled by the GET request below,
+                // but we keep the case here for potential future POST-based role fetching.
+                // For now, we'll just fetch using GET.
+                const rolesResponse = await fetch(`${PYTHON_BACKEND_URL}/debate/available_roles`);
+                 if (!rolesResponse.ok) {
+                    const errorText = await rolesResponse.text();
+                    console.error(`Backend error fetching roles: ${rolesResponse.status} - ${errorText}`);
+                    throw new Error(`Backend request failed with status ${rolesResponse.status}: ${errorText}`);
+                }
+                const rolesData = await rolesResponse.json();
+                return NextResponse.json(rolesData); // Return roles data directly
+
+            case 'run_debate_round':
+                endpoint = '/debate/round';
+                // Validate payload structure for run_debate_round
+                const debatePayload = payload as RunDebateRoundPayload;
+                if (!debatePayload || !debatePayload.selected_idea || !debatePayload.research_summary || !debatePayload.agent_role || debatePayload.round_num === undefined) {
+                     return NextResponse.json({ error: 'Invalid payload for run_debate_round action' }, { status: 400 });
+                }
+                backendPayload = debatePayload;
+                break;
+
+            case 'summarize_debate':
+                endpoint = '/debate/summarize';
+                if (!payload || !payload.debate_log) {
+                    return NextResponse.json({ error: 'Invalid payload for summarize_debate action' }, { status: 400 });
+                }
+                backendPayload = payload;
+                break;
+
+            default:
+                // Assert exhaustive check (optional, for type safety)
+                const _exhaustiveCheck: never = action;
+                return NextResponse.json({ error: 'Invalid action specified' }, { status: 400 });
+        }
+
+        const backendUrl = `${PYTHON_BACKEND_URL}${endpoint}`;
+
+        // console.log(`Forwarding request to: ${backendUrl} with payload:`, JSON.stringify(backendPayload)); // Debug logging
+
+        const response = await fetch(backendUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(backendPayload),
+        });
+
+        // console.log(`Backend response status: ${response.status}`); // Debug logging
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            // console.error(`Backend error: ${response.status} - ${errorText}`); // Debug logging
+            throw new Error(`Backend request failed with status ${response.status}: ${errorText}`);
+        }
+
+        const data = await response.json();
+        // console.log("Backend response data:", data); // Debug logging
+
+        // The Python backend might wrap results in a 'data' key or return directly
+        return NextResponse.json(data); // Return the full response structure from the backend
+
+    } catch (error) {
+        console.error("Error in debate API route:", error);
+        const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
+        return NextResponse.json({ error: 'Failed to process debate request', details: errorMessage }, { status: 500 });
+    }
+}
+
+// Keep GET for fetching available roles as it's a simple read operation
 export async function GET() {
-  return NextResponse.json({ agents, topics, debateScript });
+  try {
+    const backendUrl = `${PYTHON_BACKEND_URL}/debate/available_roles`;
+    const response = await fetch(backendUrl);
+
+    if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`Backend error fetching roles: ${response.status} - ${errorText}`);
+        throw new Error(`Backend request failed with status ${response.status}: ${errorText}`);
+    }
+
+    const data = await response.json();
+    return NextResponse.json(data); // Return the full response structure
+
+  } catch (error) {
+    console.error("Error fetching available debate roles:", error);
+    const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
+    return NextResponse.json({ error: 'Failed to fetch available roles', details: errorMessage }, { status: 500 });
+  }
 }

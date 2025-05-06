@@ -1,5 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+// Define the base URL for the Python backend
+const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL || "http://127.0.0.1:5000/api/brainstorm";
+
+// Define expected request body structures (optional but good practice)
+interface RefinementRequestBody {
+    action: 'get_themes' | 'get_context' | 'get_clarification' | 'get_pushback' | 'get_core_problem' | 'get_creative_expansion' | 'get_cross_analogs' | 'get_variant_pushback' | 'get_variant_feasibility';
+    payload: any; // Define more specific types based on action if needed
+}
+
 // Mock idea refinement data for GET
 const coreProblem = "Users need a centralized system to collect, organize, and prioritize feedback from multiple channels to ensure important insights aren't missed and can be acted upon efficiently.";
 const keyThemes = ["Centralization", "Prioritization", "Integration", "Automation", "User Experience"];
@@ -76,11 +85,87 @@ const ideaVariants = [
   },
 ];
 
-// Handles user input for the idea refinement phase
-export async function POST(req: NextRequest) {
-  const data = await req.json();
-  // TODO: Process idea refinement input and update progress
-  return NextResponse.json({ message: 'Idea refinement received', data });
+export async function POST(request: Request) {
+    try {
+        const body: RefinementRequestBody = await request.json();
+        const { action, payload } = body;
+
+        let endpoint = '';
+        let backendPayload: any = {};
+
+        // Map frontend actions to backend endpoints and payloads
+        switch (action) {
+            case 'get_themes':
+                endpoint = '/refine/themes';
+                backendPayload = { freewriting: payload.freewriting };
+                break;
+            case 'get_context':
+                endpoint = '/refine/context';
+                backendPayload = { freewriting: payload.freewriting };
+                break;
+            case 'get_clarification':
+                endpoint = '/refine/clarification';
+                backendPayload = { context_input: payload.context_input };
+                break;
+            case 'get_pushback':
+                endpoint = '/refine/pushback';
+                backendPayload = { context_input: payload.context_input, themes: payload.themes };
+                break;
+            case 'get_core_problem':
+                endpoint = '/refine/core_problem';
+                 backendPayload = { context_input: payload.context_input, clarification: payload.clarification };
+                break;
+            case 'get_creative_expansion':
+                endpoint = '/refine/creative_expansion';
+                backendPayload = { core_problem: payload.core_problem, combined_context: payload.combined_context };
+                break;
+            case 'get_cross_analogs':
+                endpoint = '/refine/cross_analogs';
+                backendPayload = { core_problem: payload.core_problem, combined_context: payload.combined_context };
+                break;
+            case 'get_variant_pushback':
+                endpoint = '/refine/variant_pushback';
+                backendPayload = { idea_variant: payload.idea_variant };
+                break;
+            case 'get_variant_feasibility':
+                endpoint = '/refine/variant_feasibility';
+                backendPayload = { idea_variant: payload.idea_variant, variant_context: payload.variant_context };
+                break;
+            default:
+                return NextResponse.json({ error: 'Invalid action specified' }, { status: 400 });
+        }
+
+        const backendUrl = `${PYTHON_BACKEND_URL}${endpoint}`;
+
+        // console.log(`Forwarding request to: ${backendUrl} with payload:`, JSON.stringify(backendPayload)); // Debug logging
+
+        const response = await fetch(backendUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(backendPayload),
+        });
+
+        // console.log(`Backend response status: ${response.status}`); // Debug logging
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            // console.error(`Backend error: ${response.status} - ${errorText}`); // Debug logging
+            throw new Error(`Backend request failed with status ${response.status}: ${errorText}`);
+        }
+
+        const data = await response.json();
+        // console.log("Backend response data:", data); // Debug logging
+
+        // The Python backend wraps results in a 'data' key
+        return NextResponse.json(data.data || data); // Return data directly, or the full response if 'data' is missing
+
+    } catch (error) {
+        console.error("Error in idea-refinement API route:", error);
+        const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
+        return NextResponse.json({ error: 'Failed to process refinement request', details: errorMessage }, { status: 500 });
+    }
 }
 
 export async function GET() {

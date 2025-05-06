@@ -9,11 +9,7 @@ export default function SiteHeader() {
         <div className="mr-4 flex">
           <Link href="/" className="flex items-center space-x-2">
             <div className="relative w-8 h-8 flex items-center justify-center">
-              <div className="absolute inset-0 bg-primary rounded-full opacity-20 animate-pulse-slow"></div>
-              <div
-                className="absolute inset-0 bg-primary/30 rounded-full blur-md animate-pulse"
-                style={{ animationDelay: "0.5s" }}
-              ></div>
+              <div className="absolute inset-0 bg-primary rounded-full opacity-15"></div>
               <Brain className="h-5 w-5 text-primary relative z-10" />
             </div>
             <span className="font-bold text-xl">deepBrainstormAI</span>

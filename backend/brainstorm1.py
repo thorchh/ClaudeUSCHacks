@@ -1,13 +1,13 @@
 from anthropic import Anthropic
 import json
 import os
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+
+app = Flask(__name__)
+CORS(app) # Enable CORS for all routes
 
 # Initialize the client with an API key
-# You should set this as an environment variable in your development environment
-# api_key = os.environ.get("ANTHROPIC_API_KEY")
-# if not api_key:
-#     raise ValueError("ANTHROPIC_API_KEY environment variable not set")
-
 client = Anthropic(api_key="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")
 MODEL = "claude-3-7-sonnet-20250219"
 
@@ -23,16 +23,31 @@ freewriting = (
 )
 
 def run_claude_tool(tool_name, tool_schema, query):
+    # Determine max_tokens based on tool_name
+    max_tokens_for_call = 16384 if tool_name == "generate_full_report" else 4096
+
     response = client.messages.create(
         model=MODEL,
-        max_tokens=1024,
+        max_tokens=max_tokens_for_call, # Use adjusted max_tokens
         tools=tool_schema,
         tool_choice={"type": "tool", "name": tool_name},
         messages=[{"role": "user", "content": query}]
     )
+    # Log the raw response for debugging, especially for the report generation
+    print(f"--- Raw Anthropic Response for {tool_name} (Max Tokens: {max_tokens_for_call}) ---")
+    print(f"Response ID: {response.id}")
+    print(f"Response Model: {response.model}")
+    print(f"Response Stop Reason: {response.stop_reason}")
+    print(f"Response Stop Sequence: {response.stop_sequence}")
+    print(f"Response Usage: {response.usage}")
+    print(f"Response Content: {response.content}") # Print the content list
+    print("--- End Raw Response ---")
+
     for content in response.content:
         if content.type == "tool_use" and content.name == tool_name:
             return content.input
+    # If the loop finishes without finding the tool_use, log and return {}
+    print(f"Warning: Tool use '{tool_name}' not found in response content:")
     return {}
 
 # === Step 1: Intake ===
@@ -52,18 +67,6 @@ theme_tool = [{
     }
 }]
 
-themes = run_claude_tool(
-    "extract_themes",
-    theme_tool,
-    f"""Extract themes from the following text and use the `extract_themes` tool.
-
-<freewriting>
-{freewriting}
-</freewriting>
-"""
-)
-print("Emergent Themes:\n", themes)
-
 context_tool = [{
     "name": "intake_context",
     "description": "Captures basic context about the user's intent and background.",
@@ -77,20 +80,6 @@ context_tool = [{
         "required": ["user_goal", "target_users", "known_constraints"]
     }
 }]
-
-context_input = run_claude_tool(
-    "intake_context",
-    context_tool,
-    f"""Simulate the intake context step for someone trying to solve the problem described in this brainstorming text.
-
-<freewriting>
-{freewriting}
-</freewriting>
-
-Now use the `intake_context` tool to summarize goal, audience, and constraints.
-"""
-)
-print("Structured Context:\n", context_input)
 
 clarification_tool = [{
     "name": "clarify_concept",
@@ -108,29 +97,6 @@ clarification_tool = [{
     }
 }]
 
-clarification = run_claude_tool(
-    "clarify_concept",
-    clarification_tool,
-    f"""You are a concept clarification agent. Parse the following context for keywords, objectives, and assumptions. If any important detail is missing or ambiguous, set 'need_more_detail' to true and ask a specific follow-up question in 'missing_detail_question'. Otherwise, set 'need_more_detail' to false.
-
-<context>
-{json.dumps(context_input, indent=2)}
-</context>
-
-Use the `clarify_concept` tool to respond.
-"""
-)
-print("Concept Clarification:\n", json.dumps(clarification, indent=2))
-
-if clarification.get("need_more_detail"):
-    default_detail_answer = (
-        "Use sender role, keywords, and explicit deadline dates to determine urgency."
-    )
-    print("Using default_detail_answer:", default_detail_answer)
-else:
-    default_detail_answer = ""
-
-# === Step 2: Initial Pushback (user can respond) ===
 constructive_pushback_tool = [{
     "name": "constructive_pushback",
     "description": "Summarizes key risks and blindspots, then generates a supportive follow-up question.",
@@ -144,40 +110,6 @@ constructive_pushback_tool = [{
     }
 }]
 
-pushback = run_claude_tool(
-    "constructive_pushback",
-    constructive_pushback_tool,
-    f"""Given the following context and themes, summarize the most important risks or blindspots (1–2 sentences), then ask a supportive, curiosity-driven question.
-
-<context>
-{json.dumps(context_input, indent=2)}
-</context>
-<themes>
-{json.dumps(themes['themes'], indent=2)}
-</themes>
-
-Use the `constructive_pushback` tool to respond.
-"""
-)
-print("\nPushback Summary:\n", pushback["summary_of_pushback"])
-print("\nCuriosity-Driven Question:\n", pushback["curiosity_question"])
-
-default_pushback_response = (
-    "I think Google integration is most critical, and AI-driven onboarding will minimize user effort."
-)
-print("\nUsing default_pushback_response:", default_pushback_response)
-
-# Define combined_context before using it in creativity/cross-pollination steps
-combined_context = {
-    "context": context_input,
-    "clarification": clarification,
-    "detail_answer": default_detail_answer,
-    "pushback_summary": pushback["summary_of_pushback"],
-    "curiosity_question": pushback["curiosity_question"],
-    "pushback_response": default_pushback_response
-}
-
-# === Step 2.5: Generate Core Problem Statement with Claude ===
 core_problem_tool = [{
     "name": "summarize_core_problem",
     "description": "Summarizes the core problem, user pain, and constraints in a concise, actionable way for use in downstream prompts.",
@@ -190,18 +122,6 @@ core_problem_tool = [{
     }
 }]
 
-core_problem_result = run_claude_tool(
-    "summarize_core_problem",
-    core_problem_tool,
-    f"""Given the following context and clarification, summarize the core problem, user pain, and constraints in a concise, actionable way. This summary will be used to anchor all downstream idea generation prompts, so make it practical and specific to the user's needs.
-
-<context>\n{json.dumps(context_input, indent=2)}\n</context>
-<clarification>\n{json.dumps(clarification, indent=2)}\n</clarification>
-"""
-)
-core_problem = core_problem_result["core_problem"]
-
-# === Step 3: Creativity Layer + Cross-Pollination ===
 meta_creativity_tool = [{
     "name": "meta_creativity",
     "description": "Applies SCAMPER, first principles, phenomenological inquiry, and Six Thinking Hats.",
@@ -228,28 +148,6 @@ meta_creativity_tool = [{
     }
 }]
 
-creative_expansion = run_claude_tool(
-    "meta_creativity",
-    meta_creativity_tool,
-    f"""You are a meta-creative agent. Expand on the original idea below, but do NOT stray from the core problem:
-{core_problem}
-
-Apply each of the following frameworks to generate practical, actionable, and relevant variations or insights for the original feedback management problem:
-- SCAMPER (Substitute, Combine, Adapt, Modify, Put to another use, Eliminate, Reverse)
-- First Principles decomposition
-- Phenomenological inquiry (describe the user's lived experience and pain)
-- Six Thinking Hats (summarize the idea from each hat's perspective)
-
-All outputs must be tightly relevant to the user's context and pain points.
-
-Limit the number of SCAMPER variations to 3.
-
-For each SCAMPER variation, use structured chain-of-thought reasoning. Output your reasoning in <thinking> tags and the final idea in <answer> tags. Think step-by-step, breaking down the problem and solution in detail.
-
-<context>\n{json.dumps(combined_context, indent=2)}\n</context>
-"""
-)
-
 cross_pollination_tool = [{
     "name": "cross_pollination",
     "description": "Generates analogical and hybrid idea mutations.",
@@ -264,31 +162,6 @@ cross_pollination_tool = [{
         "required": ["cross_industry_analogies", "hybrid_concepts", "meta_trend_inspirations", "remixed_business_models"]
     }
 }]
-
-cross_analogs = run_claude_tool(
-    "cross_pollination",
-    cross_pollination_tool,
-    f"""You are an innovation agent. Using the core problem below, generate practical, actionable, and relevant idea variants for feedback management by:
-- Drawing analogies from other industries (cross-industry analogies)
-- Proposing hybrid concepts that combine the original idea with proven solutions from other domains
-- Applying meta-trend inspirations (e.g., async collaboration, quantified self, etc.)
-- Remixing business model patterns
-
-All outputs must be tightly relevant to the user's context and pain points, and should not stray from the core problem.
-
-Limit the number of hybrid concepts to 3.
-
-For each hybrid concept, use structured chain-of-thought reasoning. Output your reasoning in <thinking> tags and the final idea in <answer> tags. Think step-by-step, breaking down the problem and solution in detail.
-
-<context>\n{json.dumps(combined_context, indent=2)}\n</context>
-<core_problem>\n{core_problem}\n</core_problem>
-"""
-)
-
-creative_variants = creative_expansion.get("scamper_variations", [])
-cross_variants = cross_analogs.get("hybrid_concepts", [])
-
-all_idea_variants = creative_variants + cross_variants
 
 feasibility_tool = [{
     "name": "score_feasibility",
@@ -305,59 +178,110 @@ feasibility_tool = [{
     }
 }]
 
-# === Step 4: Pushback + Feasibility for Each Variant ===
-variant_results = []
-for idx, idea in enumerate(all_idea_variants):
-    # Pushback (for display only)
-    variant_pushback = run_claude_tool(
-        "constructive_pushback",
-        constructive_pushback_tool,
-        f"""Given the following idea variant, summarize the most important risks or blindspots (1–2 sentences), then ask a curiosity-driven question (for display only, not for user response).
-
-<idea>\n{idea}\n</idea>
-"""
-    )
-    # Feasibility
-    variant_context = {
-        "context": context_input,
-        "clarification": clarification,
-        "detail_answer": default_detail_answer,
-        "idea_variant": idea
-    }
-    variant_feasibility = run_claude_tool(
-        "score_feasibility",
-        feasibility_tool,
-        f"""Score the feasibility of the following idea variant.
-
-<context>\n{json.dumps(variant_context, indent=2)}\n</context>
-<idea>\n{idea}\n</idea>
-"""
-    )
-    variant_results.append({
-        "idea": idea,
-        "pushback": variant_pushback,
-        "feasibility": variant_feasibility
-    })
-
-# === Step 5: Present All Ideas for User Selection ===
-print("\nIDEA VARIANTS WITH PUSHBACK & FEASIBILITY:\n")
-for idx, result in enumerate(variant_results):
-    print(f"[{idx+1}] Idea: {result['idea']}")
-    print(f"    Pushback: {result['pushback']['summary_of_pushback']}")
-    print(f"    Feasibility: {json.dumps(result['feasibility'], indent=2)}\n")
-
-selected_idx = int(input("Select the number of the idea you want to continue with: ")) - 1
-selected_idea = variant_results[selected_idx]['idea']
-print(f"\nYou selected: {selected_idea}\n")
-
-# === Step 5: Research Layer: Real-Time Knowledge Integration (after idea selection) ===
+# === Step 5: Research Layer ===
+# Expanded research agent schemas with summarized_insights and examples
 research_agents = [
+    {
+        "name": "user_psychology",
+        "description": "Analyzes psychological factors, user behavior, and motivation.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "summarized_insights": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "2-3 concise, actionable insights about user psychology. Example: 'Users feel overwhelmed by fragmented feedback channels.'"
+                },
+                "key_behaviors": {"type": "array", "items": {"type": "string"}},
+                "pain_points": {"type": "array", "items": {"type": "string"}},
+                "motivators": {"type": "array", "items": {"type": "string"}}
+            },
+            "required": ["summarized_insights", "key_behaviors", "pain_points", "motivators"]
+        }
+    },
+    {
+        "name": "business_value",
+        "description": "Assesses business value, ROI, and monetization opportunities.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "summarized_insights": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "2-3 concise, actionable business insights. Example: 'Centralizing feedback can reduce project delays by 15%.'"
+                },
+                "roi_drivers": {"type": "array", "items": {"type": "string"}},
+                "monetization_models": {"type": "array", "items": {"type": "string"}},
+                "cost_risks": {"type": "array", "items": {"type": "string"}}
+            },
+            "required": ["summarized_insights", "roi_drivers", "monetization_models", "cost_risks"]
+        }
+    },
+    {
+        "name": "market_research",
+        "description": "Identifies target audience, market size, and competitive landscape.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "summarized_insights": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "2-3 concise, actionable market insights. Example: 'SMBs are underserved in feedback management tools.'"
+                },
+                "audience_segments": {"type": "array", "items": {"type": "string"}},
+                "market_size": {"type": "string"},
+                "top_competitors": {"type": "array", "items": {"type": "string"}}
+            },
+            "required": ["summarized_insights", "audience_segments", "market_size", "top_competitors"]
+        }
+    },
+    {
+        "name": "integration_tech",
+        "description": "Assesses technical feasibility, integration points, and architecture.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "summarized_insights": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "2-3 concise, actionable technical insights. Example: 'Email and Slack APIs are the most requested integrations.'"
+                },
+                "integration_points": {"type": "array", "items": {"type": "string"}},
+                "tech_stack_options": {"type": "array", "items": {"type": "string"}},
+                "implementation_risks": {"type": "array", "items": {"type": "string"}}
+            },
+            "required": ["summarized_insights", "integration_points", "tech_stack_options", "implementation_risks"]
+        }
+    },
+    {
+        "name": "future_trends",
+        "description": "Analyzes future trends, innovation, and long-term potential.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "summarized_insights": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "2-3 concise, actionable trend insights. Example: 'AI-driven feedback triage is an emerging expectation.'"
+                },
+                "emerging_trends": {"type": "array", "items": {"type": "string"}},
+                "potential_disruptors": {"type": "array", "items": {"type": "string"}},
+                "long_term_opportunities": {"type": "array", "items": {"type": "string"}}
+            },
+            "required": ["summarized_insights", "emerging_trends", "potential_disruptors", "long_term_opportunities"]
+        }
+    },
     {
         "name": "market_intelligence",
         "description": "Pulls news, social sentiment, patent filings, startup funding, identifies hype/traction mismatch, under-discussed trends, and behavioral data correlations.",
         "input_schema": {
             "type": "object",
             "properties": {
+                "summarized_insights": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "2-3 concise, actionable market intelligence insights. Example: 'Recent funding rounds show increased investor interest in feedback tech.'"
+                },
                 "news_insights": {"type": "array", "items": {"type": "string"}},
                 "social_sentiment": {"type": "array", "items": {"type": "string"}},
                 "patent_trends": {"type": "array", "items": {"type": "string"}},
@@ -366,7 +290,7 @@ research_agents = [
                 "under_discussed_trends": {"type": "array", "items": {"type": "string"}},
                 "behavioral_correlations": {"type": "array", "items": {"type": "string"}}
             },
-            "required": ["news_insights", "social_sentiment", "patent_trends", "startup_activity", "hype_vs_traction", "under_discussed_trends", "behavioral_correlations"]
+            "required": ["summarized_insights", "news_insights", "social_sentiment", "patent_trends", "startup_activity", "hype_vs_traction", "under_discussed_trends", "behavioral_correlations"]
         }
     },
     {
@@ -375,6 +299,11 @@ research_agents = [
         "input_schema": {
             "type": "object",
             "properties": {
+                "summarized_insights": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "2-3 concise, actionable competitive insights. Example: 'Most competitors lack cross-platform feedback aggregation.'"
+                },
                 "direct_competitors": {"type": "array", "items": {"type": "string"}},
                 "indirect_competitors": {"type": "array", "items": {"type": "string"}},
                 "swot_profiles": {"type": "array", "items": {"type": "string"}},
@@ -382,7 +311,7 @@ research_agents = [
                 "business_model_archetypes": {"type": "array", "items": {"type": "string"}},
                 "opportunity_gaps": {"type": "array", "items": {"type": "string"}}
             },
-            "required": ["direct_competitors", "indirect_competitors", "swot_profiles", "saturation_map", "business_model_archetypes", "opportunity_gaps"]
+            "required": ["summarized_insights", "direct_competitors", "indirect_competitors", "swot_profiles", "saturation_map", "business_model_archetypes", "opportunity_gaps"]
         }
     },
     {
@@ -391,12 +320,17 @@ research_agents = [
         "input_schema": {
             "type": "object",
             "properties": {
+                "summarized_insights": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "2-3 concise, actionable analogical insights. Example: 'Borrowing onboarding flows from fintech apps could improve feedback adoption.'"
+                },
                 "hybrid_concepts": {"type": "array", "items": {"type": "string"}},
                 "structure_mapping": {"type": "string"},
                 "causal_layered_analysis": {"type": "string"},
                 "justifications": {"type": "array", "items": {"type": "string"}}
             },
-            "required": ["hybrid_concepts", "structure_mapping", "causal_layered_analysis", "justifications"]
+            "required": ["summarized_insights", "hybrid_concepts", "structure_mapping", "causal_layered_analysis", "justifications"]
         }
     },
     {
@@ -405,63 +339,77 @@ research_agents = [
         "input_schema": {
             "type": "object",
             "properties": {
+                "summarized_insights": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "2-3 concise, actionable contrarian insights. Example: 'Some early adopters report notification fatigue from feedback tools.'"
+                },
                 "disconfirming_data": {"type": "array", "items": {"type": "string"}},
                 "critical_press": {"type": "array", "items": {"type": "string"}},
                 "adopter_resistance": {"type": "array", "items": {"type": "string"}},
                 "robustness_notes": {"type": "string"}
             },
-            "required": ["disconfirming_data", "critical_press", "adopter_resistance", "robustness_notes"]
+            "required": ["summarized_insights", "disconfirming_data", "critical_press", "adopter_resistance", "robustness_notes"]
         }
     }
-    # Add more agents here (e.g., psychology, economics, technology, trends) as needed
 ]
 
-research_results = {agent["name"]: [] for agent in research_agents}
-for i in range(3):
-    for agent in research_agents:
-        result = run_claude_tool(
-            agent["name"],
-            [agent],
-            f"""You are the {agent['name'].replace('_', ' ').title()} Agent. Given the following idea and context, perform your research and output your top insights for this round. Do not search the internet; use your own reasoning and knowledge. Be concise, relevant, and insightful. This is round {i+1} of 3.
+@app.route('/api/brainstorm/research/available_agents', methods=['GET'])
+def get_available_research_agents():
+    agent_names = [agent['name'] for agent in research_agents]
+    return jsonify({'phase': 'research', 'step': 'available_agents', 'data': agent_names})
 
-<idea>\n{selected_idea}\n</idea>
-<context>\n{json.dumps(combined_context, indent=2)}\n</context>
+@app.route('/api/brainstorm/research/agent', methods=['POST'])
+def run_research_agent():
+    # Parse incoming JSON request
+    data = request.get_json()
+    selected_idea = data.get('selected_idea')
+    agent_name = data.get('agent_name')
+    combined_context = data.get('combined_context')
+    round_num = data.get('round_num', 1)
+
+    # Validate required fields
+    if not selected_idea or not agent_name or not combined_context:
+        return jsonify({"error": "Missing 'selected_idea', 'agent_name', or 'combined_context' in request body"}), 400
+
+    # Find the schema for the requested research agent
+    agent_schema = next((agent for agent in research_agents if agent['name'] == agent_name), None)
+    if not agent_schema:
+        return jsonify({"error": f"Agent '{agent_name}' not found"}), 404
+
+    try:
+        # Build the prompt for the research agent, including examples for summarized_insights
+        prompt = f"""You are the {agent_name.replace('_', ' ').title()} Agent. Given the following idea and context, perform your research and output your top insights for this round. It must be connected.
+
+You MUST include a 'summarized_insights' field: a list of 2-3 concise, actionable insights for this agent.
+
+Example for user_psychology: ['Users feel overwhelmed by fragmented feedback channels.', 'Timely feedback increases engagement by 30%.']
+Example for business_value: ['Centralizing feedback can reduce project delays by 15%.', 'Subscription model is most viable for SMBs.']
+Example for market_research: ['SMBs are underserved in feedback management tools.', 'Top competitors lack AI-driven triage.']
+Example for integration_tech: ['Email and Slack APIs are the most requested integrations.', 'Automated onboarding reduces friction.']
+Example for future_trends: ['AI-driven feedback triage is an emerging expectation.', 'Voice feedback is a rising trend.']
+
+<idea>
+{selected_idea}
+</idea>
+<context>
+{json.dumps(combined_context, indent=2)}
+</context>
+This is round {round_num}.
 """
+        # Call the Claude tool with the agent schema and prompt
+        agent_result = run_claude_tool(
+            agent_name,
+            [agent_schema],
+            prompt
         )
-        research_results[agent["name"]].append(result)
+        # Return the agent's research output
+        return jsonify({'phase': 'research', 'step': 'agent_insight', 'agent_name': agent_name, 'round': round_num, 'data': agent_result})
+    except Exception as e:
+        print(f"Error in /research/agent for agent {agent_name}: {e}")
+        return jsonify({'phase': 'research', 'step': 'agent_insight', 'agent_name': agent_name, 'error': str(e)}), 500
 
-print("\n=== Research Layer Results ===\n")
-for agent, result in research_results.items():
-    print(f"--- {agent.replace('_', ' ').title()} ---\n", json.dumps(result, indent=2))
-
-# Summarize all research results for debate context
-research_summary_tool = [{
-    "name": "summarize_research_context",
-    "description": "Summarizes all research agent findings into a concise, actionable context for debate agents.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "research_summary": {"type": "string"}
-        },
-        "required": ["research_summary"]
-    }
-}]
-
-research_summary = run_claude_tool(
-    "summarize_research_context",
-    research_summary_tool,
-    f"""Summarize the following research agent findings into a concise, actionable context for debate agents. Highlight the most important insights, risks, and opportunities relevant to the selected idea.
-
-<research_results>\n{json.dumps(research_results, indent=2)}\n</research_results>
-<idea>\n{selected_idea}\n</idea>
-"""
-)["research_summary"]
-
-# Pass summarized research into the debate agents as context
-
-# === Step 6: Multi-Agent Dialectical Debate (Delphi-Style) ===
-
-# Define agent roles and modular agent logic
+# === Step 6: Multi-Agent Dialectical Debate ===
 AGENT_ROLES = [
     "Market Agent",
     "Feature Agent",
@@ -496,79 +444,6 @@ agent_debate_tool = [{
     }
 }]
 
-# Store agent states for each round
-agent_states = {role: {} for role in AGENT_ROLES}
-
-for round_num in range(1, 4):
-    print(f"\n=== Debate Round {round_num} ===\n")
-    round_outputs = {}
-    for agent in AGENT_ROLES:
-        other_feedback = [agent_states[other]["insight"] for other in AGENT_ROLES if other != agent and "insight" in agent_states[other]]
-        debate_prompt = f"""{AGENT_PROMPTS[agent]}
-\nDebate the following idea:
-<idea>\n{selected_idea}\n</idea>
-<research_summary>\n{research_summary}\n</research_summary>
-Here is anonymized feedback from other agents:
-{json.dumps(other_feedback, indent=2)}
-
-At the start of this round, review all critiques and new evidence. Use structured chain-of-thought reasoning: output your step-by-step thinking in <thinking> tags and your final position in <answer> tags. If your vote or weight does not change, you must justify why. If you do change, explain what specifically caused the change. Only assign a high empirical weight if you cite concrete data, studies, or real-world examples; otherwise, use a lower weight. Do not default to 7 or 0.8—your score should reflect your true, updated position. Output a short 'change_log' describing any change in your vote/weight and why it happened (or why it did not). Output your full chain of thought as 'chain_of_thought'.
-"""
-        agent_output = run_claude_tool(
-            "agent_debate_round",
-            agent_debate_tool,
-            debate_prompt
-        )
-        round_outputs[agent] = agent_output
-        agent_states[agent] = agent_output
-    print(f"\n--- Round {round_num} Results ---\n")
-    for agent, output in round_outputs.items():
-        print(f"{agent}:\n  Insight: {output.get('insight', '[missing]')}\n  Critiques: {output.get('critiques', '[missing]')}\n  Vote: {output.get('vote', '[missing]')} (weight: {output.get('empirical_weight', '[missing]')})\n  Change Log: {output.get('change_log', '[missing]')}\n  Chain of Thought: {output.get('chain_of_thought', '[missing]')}\n")
-
-# === User Check-in ===
-while True:
-    user_input = input("On a scale of 1-5, how confident are you in the emerging results? ")
-    try:
-        user_confidence = int(user_input)
-        if 1 <= user_confidence <= 5:
-            break
-        else:
-            print("Please enter a number between 1 and 5.")
-    except ValueError:
-        print("Please enter a valid integer between 1 and 5.")
-
-if user_confidence < 4:
-    print("\nConfidence is low. Triggering targeted reanalysis in the next round...\n")
-    # Optionally, you could re-run the last round with a new prompt or more focus.
-    print("Re-running the last debate round with a targeted reanalysis prompt...\n")
-    targeted_prompt = "Focus specifically on the main sources of uncertainty or disagreement from previous rounds. What are the biggest unknowns or risks, and what additional evidence or clarification would help resolve them?"
-    round_outputs = {}
-    for agent in AGENT_ROLES:
-        other_feedback = [agent_states[other]["insight"] for other in AGENT_ROLES if other != agent and "insight" in agent_states[other]]
-        debate_prompt = f"""{AGENT_PROMPTS[agent]}
-\nTARGETED REANALYSIS: {targeted_prompt}
-Debate the following idea:
-<idea>\n{selected_idea}\n</idea>
-Here is anonymized feedback from other agents:
-{json.dumps(other_feedback, indent=2)}
-"""
-        agent_output = run_claude_tool(
-            "agent_debate_round",
-            agent_debate_tool,
-            debate_prompt
-        )
-        round_outputs[agent] = agent_output
-        agent_states[agent] = agent_output
-    print(f"\n--- Targeted Reanalysis Results ---\n")
-    for agent, output in round_outputs.items():
-        print(f"{agent}:\n  Insight: {output.get('insight', '[missing]')}\n  Critiques: {output.get('critiques', '[missing]')}\n  Vote: {output.get('vote', '[missing]')} (weight: {output.get('empirical_weight', '[missing]')})\n  Change Log: {output.get('change_log', '[missing]')}\n  Chain of Thought: {output.get('chain_of_thought', '[missing]')}\n")
-else:
-    print("\nDebate complete. Proceeding with synthesis of results.\n")
-
-# Synthesize final results (simple example: aggregate insights and votes)
-print("\n=== Final Synthesized Debate Results ===\n")
-for agent, output in agent_states.items():
-    print(f"{agent}:\n  Final Insight: {output.get('insight', '[missing]')}\n  Final Vote: {output.get('vote', '[missing]')} (weight: {output.get('empirical_weight', '[missing]')})\n  Change Log: {output.get('change_log', '[missing]')}\n  Chain of Thought: {output.get('chain_of_thought', '[missing]')}\n")
-
 # === Step 7: Feature Ideation & Prioritization ===
 feature_ideation_tool = [{
     "name": "feature_ideation",
@@ -586,21 +461,6 @@ feature_ideation_tool = [{
         "required": ["must_have_features", "nice_to_have_features", "feasibility_notes", "technical_complexity", "cost_time_estimates", "feature_pivots"]
     }
 }]
-
-feature_ideation = run_claude_tool(
-    "feature_ideation",
-    feature_ideation_tool,
-    f"""You are a Feature Ideation Agent. Given all previous context, debate results, and user feedback, generate:
-- Must-have vs nice-to-have features
-- Feasibility & technical complexity
-- Rough cost & time estimates
-- Suggested feature pivots based on user feedback and debate
-
-<context>\n{json.dumps(combined_context, indent=2)}\n</context>
-<debate_results>\n{json.dumps(agent_states, indent=2)}\n</debate_results>
-"""
-)
-print("\n=== Feature Ideation & Prioritization ===\n", json.dumps(feature_ideation, indent=2))
 
 # === Step 8: Competitive & Gap Analysis ===
 competitive_intel_tool = [{
@@ -620,24 +480,6 @@ competitive_intel_tool = [{
     }
 }]
 
-competitive_analysis = run_claude_tool(
-    "competitive_intelligence",
-    competitive_intel_tool,
-    f"""You are a Competitive Intelligence Agent. Given all previous context, debate results, and feature ideation, map:
-- 3-6 direct and indirect competitors
-- 3-6 Blue Ocean gaps
-- 3-6 SWOT profiles
-- 3-6 underserved segments and emerging players
-
-Be concise and to the point. Do not include patent overlaps. Only include the most relevant examples for each category.
-
-<context>\n{json.dumps(combined_context, indent=2)}\n</context>
-<debate_results>\n{json.dumps(agent_states, indent=2)}\n</debate_results>
-<feature_ideation>\n{json.dumps(feature_ideation, indent=2)}\n</feature_ideation>
-"""
-)
-print("\n=== Competitive & Gap Analysis ===\n", json.dumps(competitive_analysis, indent=2))
-
 # === Step 9: MVP Design & Execution Blueprint ===
 roadmap_tool = [{
     "name": "mvp_roadmap",
@@ -654,39 +496,721 @@ roadmap_tool = [{
     }
 }]
 
-mvp_roadmap = run_claude_tool(
-    "mvp_roadmap",
-    roadmap_tool,
-    f"""You are a Roadmap & Action Plan Agent. Given all previous context, debate results, feature ideation, and competitive analysis, produce:
-- MVP Architecture Overview
-- Implementation plan (milestones, toolkits, hiring needs)
-- Technical validation layer
-- Collaboration notes with Feature Agent to ensure MVP realism
+# === Research Summary Tool === (Define globally)
+research_summary_tool = [{
+    "name": "summarize_research_context",
+    "description": "Summarizes research findings into concise context for debate agents.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "research_summary": {
+                "type": "string",
+                "description": "A concise summary of the research findings, highlighting key insights, risks, and opportunities relevant to the selected idea."
+            }
+        },
+        "required": ["research_summary"]
+    }
+}]
+
+# === Debate Summary Tool ===
+summarize_debate_tool = [{
+    "name": "summarize_debate",
+    "description": "Summarizes a multi-agent debate log, highlighting key arguments, agreements, disagreements, and final consensus or tensions.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "debate_summary": {
+                "type": "string",
+                "description": "A concise yet comprehensive summary of the debate, suitable for inclusion in a final report."
+            }
+        },
+        "required": ["debate_summary"]
+    }
+}]
+
+# === Report Generation Tool === (Define globally)
+# Tool for generating the full report
+full_report_tool = [{
+    "name": "generate_full_report",
+    "description": "Generates the complete final brainstorm report based on all provided context.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "full_report_content": {
+                "type": "string",
+                "description": "The complete, formatted final report content, including all sections like Executive Summary, Problem Definition, Research, Debate, Features, Market, Roadmap, and Conclusion."
+            }
+        },
+        "required": ["full_report_content"]
+    }
+}]
+
+# Tool for generating individual sections (kept for potential future use or reference, but not used by generate_full_report)
+report_section_tool = [{
+    "name": "generate_report_section",
+    "description": "Generates a specific section of the final report.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "section_title": {"type": "string"},
+            "content": {"type": "string"}
+        },
+        "required": ["section_title", "content"]
+    }
+}]
+
+# === Phase 1: Intake & Idea Refinement ===
+
+@app.route('/api/brainstorm/refine/themes', methods=['POST'])
+def get_themes():
+    data = request.get_json()
+    current_freewriting = data.get('freewriting', freewriting) # Use provided or default
+    try:
+        themes = run_claude_tool(
+            "extract_themes",
+            theme_tool,
+            f"Extract themes from the following text and use the `extract_themes` tool.\n\n<freewriting>\n{current_freewriting}\n</freewriting>\n"
+        )
+        return jsonify({'phase': 'refine', 'step': 'themes', 'data': themes})
+    except Exception as e:
+        print(f"Error in /refine/themes: {e}")
+        return jsonify({'phase': 'refine', 'step': 'themes', 'error': str(e)}), 500
+
+@app.route('/api/brainstorm/refine/context', methods=['POST'])
+def get_context():
+    data = request.get_json()
+    current_freewriting = data.get('freewriting', freewriting) # Use provided or default
+    try:
+        context_input = run_claude_tool(
+            "intake_context",
+            context_tool,
+            f"Simulate the intake context step for someone trying to solve the problem described in this brainstorming text.\n\n<freewriting>\n{current_freewriting}\n</freewriting>\n\nNow use the `intake_context` tool to summarize goal, audience, and constraints.\n"
+        )
+        return jsonify({'phase': 'refine', 'step': 'context', 'data': context_input})
+    except Exception as e:
+        print(f"Error in /refine/context: {e}")
+        return jsonify({'phase': 'refine', 'step': 'context', 'error': str(e)}), 500
+
+@app.route('/api/brainstorm/refine/clarification', methods=['POST'])
+def get_clarification():
+    data = request.get_json()
+    context_input = data.get('context_input')
+    if not context_input:
+        return jsonify({"error": "Missing 'context_input' in request body"}), 400
+    try:
+        clarification = run_claude_tool(
+            "clarify_concept",
+            clarification_tool,
+            f"You are a concept clarification agent. Parse the following context for keywords, objectives, and assumptions. If any important detail is missing or ambiguous, set 'need_more_detail' to true and ask a specific follow-up question in 'missing_detail_question'. Otherwise, set 'need_more_detail' to false.\n\n<context>\n{json.dumps(context_input, indent=2)}\n</context>\n\nUse the `clarify_concept` tool to respond.\n"
+        )
+        return jsonify({'phase': 'refine', 'step': 'clarification', 'data': clarification})
+    except Exception as e:
+        print(f"Error in /refine/clarification: {e}")
+        return jsonify({'phase': 'refine', 'step': 'clarification', 'error': str(e)}), 500
+
+@app.route('/api/brainstorm/refine/pushback', methods=['POST'])
+def get_pushback():
+    data = request.get_json()
+    context_input = data.get('context_input')
+    themes = data.get('themes')
+    if not context_input or themes is None:
+        return jsonify({"error": "Missing 'context_input' or 'themes' in request body"}), 400
+    try:
+        # Accept both list and dict for themes
+        if isinstance(themes, dict):
+            themes_list = themes.get('themes', [])
+        else:
+            themes_list = themes
+        pushback = run_claude_tool(
+            "constructive_pushback",
+            constructive_pushback_tool,
+            f"Given the following context and themes, summarize the most important risks or blindspots (1–2 sentences), then ask a supportive, curiosity-driven question.\n\n<context>\n{json.dumps(context_input, indent=2)}\n</context>\n<themes>\n{json.dumps(themes_list, indent=2)}\n</themes>\n\nUse the `constructive_pushback` tool to respond.\n"
+        )
+        return jsonify({'phase': 'refine', 'step': 'pushback', 'data': pushback})
+    except Exception as e:
+        print(f"Error in /refine/pushback: {e}")
+        return jsonify({'phase': 'refine', 'step': 'pushback', 'error': str(e)}), 500
+
+@app.route('/api/brainstorm/refine/core_problem', methods=['POST'])
+def get_core_problem():
+    data = request.get_json()
+    context_input = data.get('context_input')
+    clarification = data.get('clarification')
+    if not context_input or not clarification:
+        return jsonify({"error": "Missing 'context_input' or 'clarification' in request body"}), 400
+    try:
+        core_problem_result = run_claude_tool(
+            "summarize_core_problem",
+            core_problem_tool,
+            f"Given the following context and clarification, summarize the core problem, user pain, and constraints in a concise, actionable way. This summary will be used to anchor all downstream idea generation prompts, so make it practical and specific to the user's needs.\n\n<context>\n{json.dumps(context_input, indent=2)}\n</context>\n<clarification>\n{json.dumps(clarification, indent=2)}\n</clarification>\n"
+        )
+        core_problem = core_problem_result.get("core_problem", "Core problem could not be summarized.")
+        return jsonify({'phase': 'refine', 'step': 'core_problem', 'data': core_problem})
+    except Exception as e:
+        print(f"Error in /refine/core_problem: {e}")
+        return jsonify({'phase': 'refine', 'step': 'core_problem', 'error': str(e)}), 500
+
+@app.route('/api/brainstorm/refine/creative_expansion', methods=['POST'])
+def get_creative_expansion():
+    data = request.get_json()
+    core_problem = data.get('core_problem')
+    combined_context = data.get('combined_context') # Frontend needs to construct this
+    user_idea = combined_context.get('context', {}).get('user_goal', '') if combined_context else ''
+    if not core_problem or not combined_context:
+         return jsonify({"error": "Missing 'core_problem' or 'combined_context' in request body"}), 400
+    try:
+        creative_expansion = run_claude_tool(
+            "meta_creativity",
+            meta_creativity_tool,
+            f"""
+You are a meta-creative agent. Expand on the following user idea and core problem, but do NOT stray from the user's context and constraints.
+
+User Idea:
+{user_idea}
+
+Core Problem:
+{core_problem}
+
+Apply each of the following frameworks to generate practical, actionable, and relevant variations or insights:
+- SCAMPER (Substitute, Combine, Adapt, Modify, Put to another use, Eliminate, Reverse)
+- First Principles decomposition
+- Phenomenological inquiry (describe the user's lived experience and pain)
+- Six Thinking Hats (summarize the idea from each hat's perspective)
+
+All outputs must be tightly relevant to the user's context and pain points. Do NOT generate outlandish, absurd, impossible, or irrelevant ideas. Avoid anything magical, sci-fi, or unrelated to the user's domain.
+
+Limit the number of SCAMPER variations to 6.
+
+For each SCAMPER variation, use structured chain-of-thought reasoning. Output your reasoning in <thinking> tags and the final idea in <answer> tags. Think step-by-step, breaking down the problem and solution in detail.
+
+<context>
+{json.dumps(combined_context, indent=2)}
+</context>
+"""
+        )
+        return jsonify({'phase': 'refine', 'step': 'creative_expansion', 'data': creative_expansion})
+    except Exception as e:
+        print(f"Error in /refine/creative_expansion: {e}")
+        return jsonify({'phase': 'refine', 'step': 'creative_expansion', 'error': str(e)}), 500
+
+@app.route('/api/brainstorm/refine/cross_analogs', methods=['POST'])
+def get_cross_analogs():
+    data = request.get_json()
+    core_problem = data.get('core_problem')
+    combined_context = data.get('combined_context') # Frontend needs to construct this
+    user_idea = combined_context.get('context', {}).get('user_goal', '') if combined_context else ''
+    if not core_problem or not combined_context:
+         return jsonify({"error": "Missing 'core_problem' or 'combined_context' in request body"}), 400
+    try:
+        cross_analogs = run_claude_tool(
+            "cross_pollination",
+            cross_pollination_tool,
+            f"""
+You are an innovation agent. Using the following user idea and core problem, generate practical, actionable, and relevant idea variants by:
+- Drawing analogies from other industries (cross-industry analogies)
+- Proposing hybrid concepts that combine the user's idea with proven solutions from other domains
+
+User Idea:
+{user_idea}
+
+Core Problem:
+{core_problem}
+
+All outputs must be tightly relevant to the user's context and pain points. Do NOT generate outlandish, absurd, impossible, or irrelevant ideas. Avoid anything magical, sci-fi, or unrelated to the user's domain.
+
+For each analogy, explain in 1-2 sentences exactly how the analogy applies to the user's idea and what specific feature, workflow, or insight it inspires.
+
+Limit the number of analogies to 6, and ensure each is clearly distinct and directly applicable to the user's problem.
+
+For each hybrid concept, first think: use structured chain-of-thought reasoning. Output your reasoning in <thinking> tags and the final idea in <answer> tags. Think step-by-step, breaking down the problem and solution in detail.
+
+<context>
+{json.dumps(combined_context, indent=2)}
+</context>
+<core_problem>
+{core_problem}
+</core_problem>
+"""
+        )
+        return jsonify({'phase': 'refine', 'step': 'cross_analogs', 'data': cross_analogs})
+    except Exception as e:
+        print(f"Error in /refine/cross_analogs: {e}")
+        return jsonify({'phase': 'refine', 'step': 'cross_analogs', 'error': str(e)}), 500
+
+@app.route('/api/brainstorm/refine/variant_pushback', methods=['POST'])
+def get_variant_pushback():
+    data = request.get_json()
+    idea_variant = data.get('idea_variant')
+    if not idea_variant:
+        return jsonify({"error": "Missing 'idea_variant' in request body"}), 400
+    try:
+        variant_pushback = run_claude_tool(
+            "constructive_pushback",
+            constructive_pushback_tool,
+            f"Given the following idea variant, summarize the most important risks or blindspots (1–2 sentences), then ask a curiosity-driven question (for display only, not for user response).\n\n<idea>\n{idea_variant}\n</idea>\n"
+        )
+        return jsonify({'phase': 'refine', 'step': 'variant_pushback', 'data': variant_pushback})
+    except Exception as e:
+        print(f"Error in /refine/variant_pushback: {e}")
+        return jsonify({'phase': 'refine', 'step': 'variant_pushback', 'error': str(e)}), 500
+
+@app.route('/api/brainstorm/refine/variant_feasibility', methods=['POST'])
+def get_variant_feasibility():
+    data = request.get_json()
+    idea_variant = data.get('idea_variant')
+    variant_context = data.get('variant_context') # Frontend needs to construct this
+    if not idea_variant or not variant_context:
+        return jsonify({"error": "Missing 'idea_variant' or 'variant_context' in request body"}), 400
+    try:
+        variant_feasibility = run_claude_tool(
+            "score_feasibility",
+            feasibility_tool,
+            f"Score the feasibility of the following idea variant.\n\n<context>\n{json.dumps(variant_context, indent=2)}\n</context>\n<idea>\n{idea_variant}\n</idea>\n"
+        )
+        return jsonify({'phase': 'refine', 'step': 'variant_feasibility', 'data': variant_feasibility})
+    except Exception as e:
+        print(f"Error in /refine/variant_feasibility: {e}")
+        return jsonify({'phase': 'refine', 'step': 'variant_feasibility', 'error': str(e)}), 500
+
+
+# === Phase 2: Research ===
+
+@app.route('/api/brainstorm/research/summary', methods=['POST'])
+def summarize_research():
+    data = request.get_json()
+    research_results = data.get('research_results')
+    selected_idea = data.get('selected_idea')
+    if not research_results or not selected_idea:
+        return jsonify({"error": "Missing 'research_results' or 'selected_idea' in request body"}), 400
+
+    try:
+        prompt = f"""
+You are an expert research summarizer. Your task is to create a comprehensive, information-rich summary for debate agents based on the following research agent findings. The summary should be clear and should mention at the very least the 5 most important points. Return the summary through tool use. 
+
+<research_results>
+{json.dumps(research_results, indent=2)}
+</research_results>
+<idea>
+{selected_idea}
+</idea>
+"""
+        summary_result = run_claude_tool(
+            "summarize_research_context",
+            research_summary_tool,
+            prompt
+        )
+        print(f"Research summary result: {summary_result}")
+        return jsonify({'phase': 'research', 'step': 'summary', 'data': summary_result})
+    except Exception as e:
+        print(f"Error in /research/summary: {e}")
+        return jsonify({'phase': 'research', 'step': 'summary', 'error': str(e)}), 500
+
+
+# === Phase 3: Debate ===
+
+@app.route('/api/brainstorm/debate/available_roles', methods=['GET'])
+def get_available_debate_roles():
+    return jsonify({'phase': 'debate', 'step': 'available_roles', 'data': AGENT_ROLES})
+
+@app.route('/api/brainstorm/debate/round', methods=['POST'])
+def run_debate_round():
+    data = request.get_json()
+    selected_idea = data.get('selected_idea')
+    research_summary = data.get('research_summary')
+    agent_role = data.get('agent_role')
+    other_feedback = data.get('other_feedback', [])
+    round_num = data.get('round_num')
+
+    if not selected_idea or not research_summary or not agent_role or round_num is None:
+        return jsonify({"error": "Missing 'selected_idea', 'research_summary', 'agent_role', or 'round_num' in request body"}), 400
+    if agent_role not in AGENT_ROLES:
+        return jsonify({"error": f"Invalid agent_role: {agent_role}. Must be one of {AGENT_ROLES}"}), 400
+
+    try:
+        debate_prompt = f"""{AGENT_PROMPTS[agent_role]}
+\nDebate the following idea:
+<idea>\n{selected_idea}\n</idea>
+<research_summary>\n{research_summary}\n</research_summary>
+Here is anonymized feedback from other agents in this round (if any):
+{json.dumps(other_feedback, indent=2)}
+
+This is Round {round_num}. At the start of this round, review all critiques and new evidence. Use structured chain-of-thought reasoning: output your step-by-step thinking in <thinking> tags and your final position in <answer> tags. If your vote or weight does not change, you must justify why. If you do change, explain what specifically caused the change. Only assign a high empirical weight if you cite concrete data, studies, or real-world examples; otherwise, use a lower weight. Do not default to 7 or 0.8—your score should reflect your true, updated position. Output a short 'change_log' describing any change in your vote/weight and why it happened (or why it did not). Output your full chain of thought as 'chain_of_thought'. Use the `agent_debate_round` tool.
+"""
+        round_result = run_claude_tool(
+            "agent_debate_round",
+            agent_debate_tool,
+            debate_prompt
+        )
+        if 'agent_name' not in round_result:
+             round_result['agent_name'] = agent_role
+
+        return jsonify({'phase': 'debate', 'step': 'agent_turn', 'round': round_num, 'agent_role': agent_role, 'data': round_result})
+    except Exception as e:
+        print(f"Error in /debate/round for agent {agent_role}, round {round_num}: {e}")
+        return jsonify({'phase': 'debate', 'step': 'agent_turn', 'round': round_num, 'agent_role': agent_role, 'error': str(e)}), 500
+
+@app.route('/api/brainstorm/debate/summarize', methods=['POST'])
+def summarize_debate_log():
+    data = request.get_json()
+    debate_log = data.get('debate_log')
+    selected_idea = data.get('selected_idea', 'the discussed idea')
+    if not debate_log:
+        return jsonify({"error": "Missing 'debate_log' in request body"}), 400
+
+    try:
+        prompt = f"""Summarize the following multi-agent debate log regarding the idea: '{selected_idea}'.
+Focus on the key arguments presented by each agent role, significant critiques, areas of agreement and disagreement, and the overall evolution of the discussion. Conclude with the final consensus or unresolved tensions. The summary should be comprehensive enough for a final report.
+
+<debate_log>
+{json.dumps(debate_log, indent=2)}
+</debate_log>
+
+Use the `summarize_debate` tool to output the summary.
+"""
+        summary_result = run_claude_tool(
+            "summarize_debate",
+            summarize_debate_tool,
+            prompt
+        )
+
+        if not summary_result or not summary_result.get("debate_summary"):
+            summary_content = "Error: Debate summary generation failed."
+            return jsonify({'phase': 'debate', 'step': 'summary', 'error': summary_content}), 500
+        else:
+            summary_content = summary_result.get('debate_summary')
+
+        return jsonify({'phase': 'debate', 'step': 'summary', 'data': summary_content})
+
+    except Exception as e:
+        error_message = f"Error summarizing debate: {e}"
+        print(error_message)
+        return jsonify({'phase': 'debate', 'step': 'summary', 'error': error_message}), 500
+
+
+# === Phase 4: Feature Ideation ===
+@app.route('/api/brainstorm/feature_ideation', methods=['POST'])
+def get_feature_ideation():
+    data = request.get_json()
+    combined_context = data.get('combined_context')
+    debate_results = data.get('debate_results')
+    if not combined_context or not debate_results:
+        return jsonify({"error": "Missing 'combined_context' or 'debate_results' in request body"}), 400
+
+    try:
+        prompt = f"""You are a Feature Ideation Agent. Given all previous context, debate results, and user feedback, generate:
+- Must-have vs nice-to-have features
+- Feasibility & technical complexity
+- Rough cost & time estimates
+- Suggested feature pivots based on user feedback and debate
 
 <context>\n{json.dumps(combined_context, indent=2)}\n</context>
-<debate_results>\n{json.dumps(agent_states, indent=2)}\n</debate_results>
+<debate_results>\n{json.dumps(debate_results, indent=2)}\n</debate_results>
+
+Use the `feature_ideation` tool.
+"""
+        feature_result = run_claude_tool(
+            "feature_ideation",
+            feature_ideation_tool,
+            prompt
+        )
+        return jsonify({'phase': 'feature_ideation', 'step': 'result', 'data': feature_result})
+    except Exception as e:
+        print(f"Error in /feature_ideation: {e}")
+        return jsonify({'phase': 'feature_ideation', 'step': 'result', 'error': str(e)}), 500
+
+# === Phase 5: Competitive Analysis ===
+@app.route('/api/brainstorm/competitive_analysis', methods=['POST'])
+def get_competitive_analysis():
+    data = request.get_json()
+    combined_context = data.get('combined_context')
+    debate_results = data.get('debate_results')
+    feature_ideation = data.get('feature_ideation')
+    if not combined_context or not debate_results or not feature_ideation:
+        return jsonify({"error": "Missing 'combined_context', 'debate_results', or 'feature_ideation' in request body"}), 400
+
+    try:
+        prompt = f"""You are a Competitive Intelligence Agent. Given all previous context, debate results, and feature ideation, map:
+- 3-6 direct and indirect competitors
+- 3-6 Blue Ocean gaps
+- 3-6 SWOT profiles
+- 3-6 underserved segments and emerging players
+
+Be concise and to the point. Do not include patent overlaps. Only include the most relevant examples for each category.
+
+<context>\n{json.dumps(combined_context, indent=2)}\n</context>
+<debate_results>\n{json.dumps(debate_results, indent=2)}\n</debate_results>
+<feature_ideation>\n{json.dumps(feature_ideation, indent=2)}\n</feature_ideation>
+
+Use the `competitive_intelligence` tool.
+"""
+        analysis_result = run_claude_tool(
+            "competitive_intelligence",
+            competitive_intel_tool,
+            prompt
+        )
+        return jsonify({'phase': 'competitive_analysis', 'step': 'result', 'data': analysis_result})
+    except Exception as e:
+        print(f"Error in /competitive_analysis: {e}")
+        return jsonify({'phase': 'competitive_analysis', 'step': 'result', 'error': str(e)}), 500
+
+# === Phase 6: MVP Roadmap ===
+@app.route('/api/brainstorm/mvp_roadmap', methods=['POST'])
+def get_mvp_roadmap():
+    data = request.get_json()
+    combined_context = data.get('combined_context')
+    debate_results = data.get('debate_results')
+    feature_ideation = data.get('feature_ideation')
+    competitive_analysis = data.get('competitive_analysis')
+    if not combined_context or not debate_results or not feature_ideation or not competitive_analysis:
+        return jsonify({"error": "Missing 'combined_context', 'debate_results', 'feature_ideation', or 'competitive_analysis' in request body"}), 400
+
+    try:
+        # Updated prompt to emphasize conciseness and realism for MVP
+        prompt = f"""You are a Roadmap & Action Plan Agent. Given all previous context, debate results, feature ideation, and competitive analysis, produce:
+- **MVP Architecture Overview:** Keep this high-level, focusing on core components.
+- **Implementation Plan:** Outline key milestones, essential toolkits/tech, and realistic hiring needs for an *initial* MVP. Avoid overly detailed long-term plans.
+- **Technical Validation:** Briefly confirm the core technical feasibility.
+- **Collaboration Notes:** Note key points for Feature Agent alignment on MVP scope.
+
+**Focus on a *Minimum* Viable Product.** Keep the architecture and plan concise and grounded. Provide realistic, high-level estimates suitable for an initial MVP launch, avoiding excessively large figures unless strongly justified by the input context.
+
+<context>\n{json.dumps(combined_context, indent=2)}\n</context>
+<debate_results>\n{json.dumps(debate_results, indent=2)}\n</debate_results>
 <feature_ideation>\n{json.dumps(feature_ideation, indent=2)}\n</feature_ideation>
 <competitive_analysis>\n{json.dumps(competitive_analysis, indent=2)}\n</competitive_analysis>
-"""
-)
-print("\n=== MVP Design & Execution Blueprint ===\n", json.dumps(mvp_roadmap, indent=2))
 
-# === Final Report ===
-print("\n=== FINAL REPORT ===\n")
-print("\n--- Feature Ideation & Prioritization (Top 3-6) ---\n", json.dumps({
-    'must_have_features': feature_ideation['must_have_features'][:6],
-    'nice_to_have_features': feature_ideation['nice_to_have_features'][:6],
-    'feasibility_notes': feature_ideation['feasibility_notes'],
-    'technical_complexity': feature_ideation['technical_complexity'],
-    'cost_time_estimates': feature_ideation['cost_time_estimates'],
-    'feature_pivots': feature_ideation['feature_pivots'][:6]
-}, indent=2))
-print("\n--- Competitive & Gap Analysis (Top 3-6) ---\n", json.dumps({
-    'direct_competitors': competitive_analysis['direct_competitors'][:6],
-    'indirect_competitors': competitive_analysis['indirect_competitors'][:6],
-    'blue_ocean_gaps': competitive_analysis['blue_ocean_gaps'][:6],
-    'swot_profiles': competitive_analysis['swot_profiles'][:6],
-    'underserved_segments': competitive_analysis['underserved_segments'][:6],
-    'emerging_players': competitive_analysis['emerging_players'][:6]
-}, indent=2))
-print("\n--- MVP Design & Execution Blueprint ---\n", json.dumps(mvp_roadmap, indent=2))
+Use the `mvp_roadmap` tool.
+"""
+        roadmap_result = run_claude_tool(
+            "mvp_roadmap",
+            roadmap_tool,
+            prompt
+        )
+        return jsonify({'phase': 'mvp_roadmap', 'step': 'result', 'data': roadmap_result})
+    except Exception as e:
+        print(f"Error in /mvp_roadmap: {e}")
+        return jsonify({'phase': 'mvp_roadmap', 'step': 'result', 'error': str(e)}), 500
+
+
+# === Phase 7: Report Generation ===
+
+# New endpoint for generating the full report
+@app.route('/api/brainstorm/report/generate_full', methods=['POST'])
+def generate_full_report():
+    data = request.get_json()
+    combined_context = data.get('combined_context') # Expect full context
+
+    if not combined_context:
+        return jsonify({"error": "Missing 'combined_context' in request body"}), 400
+
+    # Construct a comprehensive context string for the prompt
+    report_context_str = f"""
+Selected Idea/Core Problem: {combined_context.get('core_problem', 'N/A')}
+Initial Context & Refinement: {json.dumps(combined_context.get('context', {}), indent=2)}
+Research Summary: {json.dumps(combined_context.get('research_summary', {}), indent=2)}
+Debate Summary/Log: {json.dumps(combined_context.get('debate_log', []), indent=2)}
+Feature Ideation: {json.dumps(combined_context.get('feature_ideation', {}), indent=2)}
+Competitive Analysis: {json.dumps(combined_context.get('competitive_analysis', {}), indent=2)}
+MVP Roadmap: {json.dumps(combined_context.get('mvp_roadmap', {}), indent=2)}
+"""
+
+    try:
+        # Updated prompt with explicit detail, section requirements, emoji request, MVP simplification, table request, and TL;DRs
+        prompt = f"""
+Generate an extremely detailed, engaging, and highly readable final brainstorm report. Your goal is to synthesize all provided information into a cohesive, actionable, and visually appealing document. Be insightful, draw deep connections between the different phases (refinement, research, debate, features, market, roadmap).
+
+## 📐 Formatting & Readability Requirements
+- Use excellent **markdown formatting**: clear section headings (##), lists, tables, and callouts where appropriate.
+- Add a **bolded TL;DR** after each major section (e.g., `**TL;DR:** ...`) with a 1-2 sentence summary.
+- include emojis (✨, 🎯, 💡, 🚀, 💰, 📈, 🤔, ✅, and a lot more.) to highlight ideas and make it more engaging while keeping it professional.
+- Use **callouts** (`> **Note:** ...`) for warnings, caveats, or standout insights.
+- Use **tables** for structured data like feature lists, SWOT, or competitor comparisons.
+- Write in **concise paragraphs and bullet points** to improve readability and scan-ability.
+- The report must feel well-organized, actionable, and tailored for busy stakeholders.
+- Make sure that the report is **engaging and easy to read**.
+
+## 📄 Required Sections
+1. **Executive Summary**
+2. **Problem Definition & Refinement**
+3. **Idea Exploration & Selection**
+4. **Research Insights**
+5. **Debate Perspectives**
+6. **Feature Ideation & Prioritization** (with markdown table)
+7. **Competitive & Gap Analysis** (include SWOT and competitor tables)
+8. **MVP Design & Execution Blueprint**
+9. **Conclusion & Next Steps**
+
+---
+
+## 🧠 Example Report Structure (Use this as formatting guide)
+
+```markdown
+## 🚀 Executive Summary
+**TL;DR:** We're tackling [core problem] by building a lean MVP that offers [key value proposition] to [target audience].
+
+* **Problem:** Users struggle with ...
+* **Solution:** We propose ...
+* **Key Insights:** Market gap in X, strong user signal from Y
+* **MVP:** Focused on 3 core features: A, B, C
+
+---
+
+## 🔍 Problem Definition & Refinement
+Users today face [context]. Through stakeholder interviews and scoping, we refined the original idea into a sharper core problem:
+
+> **Final Problem Statement:** _"How might we help [target user] achieve [goal] without [pain point]?"_
+
+**Constraints:**
+- Time budget: 3 months
+- Team: 1 PM, 1 designer, 2 engineers
+
+**TL;DR:** Narrowed scope to focus on solving [X] for [Y] users under [Z] constraints.
+
+---
+
+## 💡 Idea Exploration & Selection
+We explored several approaches:
+
+| Idea | Pros | Cons |
+|------|------|------|
+| Self-serve tool | Scalable, low touch | Requires upfront trust |
+| AI assistant | High UX value | Complex to build |
+
+We chose **Self-serve tool** due to simplicity and time-to-market.
+
+**TL;DR:** Chose simplest idea with strong signal and clear path to MVP.
+
+---
+
+## 📊 Research Insights
+
+**User Interviews:**
+- "I waste hours tracking this manually."
+- "I'd pay for something that just works."
+
+**Market Findings:**
+- $1.2B annual spend in adjacent tools
+- Key competitors are weak in automation
+
+> **Note:** Most current tools are built for enterprises, not indie creators.
+
+**TL;DR:** Users crave simplicity. Market opportunity exists in the long tail.
+
+---
+
+## 🤔 Debate Perspectives
+
+| Position | Argument |
+|----------|----------|
+| For | Fast to build, fits timeline |
+| Against | Too generic, no moat |
+
+After team discussion, we agreed to validate with a prototype.
+
+**TL;DR:** Debate clarified direction: go fast, test quickly, learn.
+
+---
+
+## ⚙️ Feature Ideation & Prioritization
+
+| Feature | Must-Have | Nice-to-Have | Feasibility Notes |
+|---------|-----------|--------------|-------------------|
+| Dashboard | ✅ |  | Easy to implement |
+| Export to PDF |  | ✅ | Requires 3rd-party lib |
+| Auto-tagging | ✅ |  | Medium complexity |
+
+**TL;DR:** Focus MVP on 3 features: dashboard, tagging, and insights.
+
+---
+
+## 🧩 Competitive & Gap Analysis
+
+**Competitor Table:**
+
+| Competitor | Strengths | Weaknesses | Pricing |
+|------------|-----------|------------|---------|
+| Tool A | UX polish | Expensive | $29/mo |
+| Tool B | Flexible | Poor onboarding | $15/mo |
+
+**SWOT Summary:**
+
+| Strengths | Weaknesses |
+|-----------|------------|
+| Fast to build | Narrow niche |
+| Focused UX | Limited integrations |
+
+| Opportunities | Threats |
+|---------------|---------|
+| Underserved indie market | Bigger players entering space |
+| Rising creator economy | High churn risk |
+
+**TL;DR:** Room to win with simplicity and focus.
+
+---
+
+## 🛠 MVP Blueprint
+
+**Scope:**
+- Dashboard with tagging
+- Simple onboarding
+- Export option
+
+**Tech Stack:**
+- Frontend: React + Tailwind
+- Backend: Firebase
+- Timeline: 10 weeks
+
+**Budget:**
+- ~$25k for initial build
+
+**TL;DR:** Lean build, fast to market, sets foundation for v2.
+
+---
+
+## ✅ Conclusion & Next Steps
+
+* **Why it matters:** Helps [user] solve [problem] in a new, simpler way.
+* **What's next:**
+  1. Build prototype (2 weeks)
+  2. Run 5 user tests
+  3. Launch MVP in private beta
+
+**TL;DR:** High-impact, low-risk idea. Let's build and test fast.
+```
+
+<report_context>
+{report_context_str}
+</report_context>
+
+Use the `generate_full_report` tool to output the complete report content in the 'full_report_content' field.
+"""
+        report_result = run_claude_tool(
+            "generate_full_report",
+            full_report_tool, # Use the new tool schema
+            prompt
+        )
+
+        # Ensure a fallback if the tool fails or returns empty content
+        if not report_result or not report_result.get("full_report_content"):
+             error_message = "Error: Full report generation failed. The model did not return content. Please review the context and try again."
+             import sys
+             print(error_message, file=sys.stderr) # Print to stderr
+             sys.stderr.flush() # Force flush
+             return jsonify({'phase': 'report', 'step': 'full_report', 'error': error_message}), 500
+        else:
+            report_content = report_result.get('full_report_content')
+
+        # Return the full report content
+        return jsonify({'phase': 'report', 'step': 'full_report', 'data': report_content})
+
+    except Exception as e:
+        error_message = f"Error generating full report: {e}"
+        import sys
+        print(error_message, file=sys.stderr) # Print to stderr
+        sys.stderr.flush() # Force flush
+        # Return error
+        return jsonify({'phase': 'report', 'step': 'full_report', 'error': error_message}), 500
+
+
+if __name__ == '__main__':
+    app.run(debug=True, port=5000)

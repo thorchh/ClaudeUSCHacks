@@ -1,159 +1,89 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-// Mock research data for initial GET
-const researchAreas = [
-  {
-    id: "psychology",
-    name: "Psychology",
-    description: "Analyzing psychological factors and user behavior",
-    progress: 0,
-    complete: false,
-    insights: [],
-    color: "purple",
-    sources: 0,
-  },
-  {
-    id: "economics",
-    name: "Economics",
-    description: "Evaluating economic viability and market potential",
-    progress: 0,
-    complete: false,
-    insights: [],
-    color: "blue",
-    sources: 0,
-  },
-  {
-    id: "market",
-    name: "Market Research",
-    description: "Identifying target audience and competitive landscape",
-    progress: 0,
-    complete: false,
-    insights: [],
-    color: "green",
-    sources: 0,
-  },
-  {
-    id: "technology",
-    name: "Technology",
-    description: "Assessing technical feasibility and implementation",
-    progress: 0,
-    complete: false,
-    insights: [],
-    color: "indigo",
-    sources: 0,
-  },
-  {
-    id: "trends",
-    name: "Trends & Future",
-    description: "Analyzing future trends and long-term potential",
-    progress: 0,
-    complete: false,
-    insights: [],
-    color: "amber",
-    sources: 0,
-  },
-];
+// Define the base URL for the Python backend
+const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL || "http://127.0.0.1:5000/api/brainstorm";
 
-const researchAgents = [
-  {
-    id: "agent1",
-    name: "DataMiner",
-    avatar: "DM",
-    color: "blue",
-    specialization: "Data Analysis",
-    currentArea: "economics",
-    status: "searching",
-    currentQuery: "Subscription model analysis",
-  },
-  {
-    id: "agent2",
-    name: "TechScout",
-    avatar: "TS",
-    color: "indigo",
-    specialization: "Technology Assessment",
-    currentArea: "technology",
-    status: "analyzing",
-    currentQuery: "Multi-agent architecture",
-  },
-  {
-    id: "agent3",
-    name: "MarketSense",
-    avatar: "MS",
-    color: "green",
-    specialization: "Market Analysis",
-    currentArea: "market",
-    status: "searching",
-    currentQuery: "Competitor analysis",
-  },
-  {
-    id: "agent4",
-    name: "PsychProbe",
-    avatar: "PP",
-    color: "purple",
-    specialization: "Behavioral Insights",
-    currentArea: "psychology",
-    status: "analyzing",
-    currentQuery: "User motivation patterns",
-  },
-  {
-    id: "agent5",
-    name: "TrendWatcher",
-    avatar: "TW",
-    color: "amber",
-    specialization: "Future Forecasting",
-    currentArea: "trends",
-    status: "searching",
-    currentQuery: "AI innovation trajectory",
-  },
-  {
-    id: "agent6",
-    name: "CompScanner",
-    avatar: "CS",
-    color: "green",
-    specialization: "Competitive Intelligence",
-    currentArea: "market",
-    status: "searching",
-    currentQuery: "Market size estimation",
-  },
-  {
-    id: "agent7",
-    name: "PsychAnalyst",
-    avatar: "PA",
-    color: "purple",
-    specialization: "Cognitive Analysis",
-    currentArea: "psychology",
-    status: "analyzing",
-    currentQuery: "Cognitive biases in ideation",
-  },
-  {
-    id: "agent8",
-    name: "TechArchitect",
-    avatar: "TA",
-    color: "indigo",
-    specialization: "System Design",
-    currentArea: "technology",
-    status: "searching",
-    currentQuery: "Frontend visualization techniques",
-  },
-  {
-    id: "agent9",
-    name: "MarketDemog",
-    avatar: "MD",
-    color: "green",
-    specialization: "Demographics",
-    currentArea: "market",
-    status: "analyzing",
-    currentQuery: "User demographics",
-  },
-];
-
-export async function GET() {
-  return NextResponse.json({ researchAreas, researchAgents });
+// Define expected request body structure
+interface ResearchRequestBody {
+    action: 'run_agent' | 'get_summary';
+    payload: any; // Define more specific types based on action if needed
 }
 
-// Handles user input for the research phase
 export async function POST(req: NextRequest) {
-  const data = await req.json();
-  // TODO: Process research input and update progress
-  return NextResponse.json({ message: 'Research input received', data });
+    try {
+        const body: ResearchRequestBody = await req.json();
+        const { action, payload } = body;
+
+        let endpoint = '';
+        let backendPayload: any = {};
+
+        // Map frontend actions to backend endpoints and payloads
+        switch (action) {
+            case 'run_agent':
+                endpoint = '/research/agent';
+                // Payload for run_agent should contain: selected_idea, agent_name, combined_context, round_num
+                backendPayload = payload; // Forward the payload directly
+                break;
+            case 'get_summary':
+                endpoint = '/research/summary';
+                 // Payload for get_summary should contain: research_results, selected_idea
+                backendPayload = payload; // Forward the payload directly
+                break;
+            default:
+                // Assert exhaustive check (optional, for type safety)
+                const _: never = action;
+                return NextResponse.json({ error: 'Invalid research action specified' }, { status: 400 });
+        }
+
+        const backendUrl = `${PYTHON_BACKEND_URL}${endpoint}`;
+
+        console.log(`Forwarding research request (${action}) to: ${backendUrl}`); // Debug logging
+
+        const response = await fetch(backendUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(backendPayload),
+        });
+
+        console.log(`Backend response status for ${action}: ${response.status}`); // Debug logging
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error(`Backend error for ${action}: ${response.status} - ${errorText}`); // Debug logging
+            // Try to parse error details if backend sends JSON error
+            let errorDetails = errorText;
+            try {
+                const errorJson = JSON.parse(errorText);
+                errorDetails = errorJson.error || errorJson.details || errorText;
+            } catch (parseError) {
+                // Ignore if error text is not JSON
+            }
+            // Return a JSON error response
+            return NextResponse.json({ error: `Backend request failed for ${action}`, details: errorDetails }, { status: response.status });
+        }
+
+        const data = await response.json();
+        console.log(`Backend response data for ${action}:`, data); // Debug logging
+
+        // IMPORTANT: The Python backend wraps results in a 'data' key.
+        // We return the entire response object from the Next.js route,
+        // and the frontend's callResearchApi function will access `response.data`.
+        return NextResponse.json(data); // Return the full backend response
+
+    } catch (error: any) {
+        console.error("Error in main research API route:", error);
+        const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
+        // Check for fetch errors (e.g., connection refused)
+        if (error.cause && error.cause.code === 'ECONNREFUSED') {
+            errorMessage = `Connection refused when trying to reach backend at ${PYTHON_BACKEND_URL}. Is the backend running?`;
+        }
+        return NextResponse.json({ error: 'Failed to process research request', details: errorMessage }, { status: 500 });
+    }
+}
+
+// Optional: Add a GET handler if needed for testing or info
+export async function GET() {
+  return NextResponse.json({ message: "This is the main research endpoint. Use POST with 'action' and 'payload'." });
 }

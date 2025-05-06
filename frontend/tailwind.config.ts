@@ -73,9 +73,106 @@ const config = {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
       },
+      typography: (theme: (path: string) => string) => ({
+        DEFAULT: {
+          css: {
+            '--tw-prose-body': theme('colors.foreground / 1'),
+            '--tw-prose-headings': theme('colors.foreground'),
+            '--tw-prose-lead': theme('colors.muted.foreground'),
+            '--tw-prose-links': theme('colors.primary'),
+            '--tw-prose-bold': theme('colors.foreground'),
+            '--tw-prose-counters': theme('colors.muted.foreground'),
+            '--tw-prose-bullets': theme('colors.muted.foreground'),
+            '--tw-prose-hr': theme('colors.border'),
+            '--tw-prose-quotes': theme('colors.foreground'),
+            '--tw-prose-quote-borders': theme('colors.primary'),
+            '--tw-prose-captions': theme('colors.muted.foreground'),
+            '--tw-prose-code': theme('colors.foreground'),
+            '--tw-prose-pre-code': theme('colors.gray[200]'),
+            '--tw-prose-pre-bg': theme('colors.gray[800]'),
+            '--tw-prose-th-borders': theme('colors.border'),
+            '--tw-prose-td-borders': theme('colors.border'),
+            '--tw-prose-invert-body': theme('colors.background / 0.9'),
+            '--tw-prose-invert-headings': theme('colors.background'),
+            '--tw-prose-invert-lead': theme('colors.muted.foreground'),
+            '--tw-prose-invert-links': theme('colors.primary'),
+            '--tw-prose-invert-bold': theme('colors.background'),
+            '--tw-prose-invert-counters': theme('colors.muted.foreground'),
+            '--tw-prose-invert-bullets': theme('colors.muted.foreground'),
+            '--tw-prose-invert-hr': theme('colors.border'),
+            '--tw-prose-invert-quotes': theme('colors.background'),
+            '--tw-prose-invert-quote-borders': theme('colors.primary'),
+            '--tw-prose-invert-captions': theme('colors.muted.foreground'),
+            '--tw-prose-invert-code': theme('colors.background'),
+            '--tw-prose-invert-pre-code': theme('colors.gray[300]'),
+            '--tw-prose-invert-pre-bg': theme('colors.gray[700]'),
+            '--tw-prose-invert-th-borders': theme('colors.border'),
+            '--tw-prose-invert-td-borders': theme('colors.border'),
+            fontSize: theme('fontSize.base'),
+            lineHeight: theme('lineHeight.relaxed'),
+            h1: {
+              fontWeight: '700',
+              fontSize: theme('fontSize.3xl'),
+            },
+            h2: {
+              fontWeight: '600',
+              fontSize: theme('fontSize.2xl'),
+            },
+            h3: {
+              fontWeight: '600',
+              fontSize: theme('fontSize.xl'),
+            },
+            a: {
+              textDecoration: 'none',
+              fontWeight: '500',
+              '&:hover': {
+                textDecoration: 'underline',
+                color: theme('colors.primary / 0.8'),
+              },
+            },
+            code: {
+              backgroundColor: theme('colors.muted / 0.3'),
+              padding: '0.2em 0.4em',
+              borderRadius: theme('borderRadius.md'),
+              fontWeight: '500',
+              fontSize: '90%',
+              '&::before': { content: 'none !important' },
+              '&::after': { content: 'none !important' },
+            },
+            pre: {
+              borderRadius: theme('borderRadius.lg'),
+              padding: theme('spacing.6'),
+            },
+            blockquote: {
+              fontStyle: 'normal',
+              borderLeftWidth: '4px',
+              paddingLeft: theme('spacing.6'),
+            },
+            thead: {
+              borderBottomWidth: '2px',
+              borderBottomColor: 'var(--tw-prose-th-borders)',
+              th: {
+                fontWeight: '600',
+                color: 'var(--tw-prose-headings)',
+                padding: theme('spacing.3'),
+              }
+            },
+            'tbody tr': {
+              borderBottomWidth: '1px',
+              borderBottomColor: 'var(--tw-prose-td-borders)',
+            },
+            'tbody tr:last-child': {
+              borderBottomWidth: '0',
+            },
+            td: {
+              padding: theme('spacing.3'),
+            },
+          },
+        },
+      }),
     },
   },
-  plugins: [require("tailwindcss-animate")],
+  plugins: [require("tailwindcss-animate"), require("@tailwindcss/typography")],
 } satisfies Config
 
 export default config

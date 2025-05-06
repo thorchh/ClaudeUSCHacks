@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils"
 
 interface IdeaRefinementPhaseProps {
   idea: string
-  onComplete: (selectedIdea: string) => void
+  onComplete: (selectedIdea: string, combinedContext: any) => void // Updated prop type
 }
 
 type WorkflowStep = "intake" | "pushback" | "creativity" | "variants" | "selection"
@@ -37,6 +37,26 @@ interface ThemeItem {
   color: string
 }
 
+// --- API Helper ---
+const callRefinementApi = async (action: string, payload: any) => {
+  try {
+    const response = await fetch('/api/brainstorm/idea-refinement', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, payload }),
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.details || errorData.error || `API request failed with status ${response.status}`);
+    }
+    const data = await response.json();
+    return data;
+  } catch (error: any) {
+    console.error(`Error calling refinement API action ${action}:`, error);
+    return null;
+  }
+};
+
 export default function IdeaRefinementPhase({ idea, onComplete }: IdeaRefinementPhaseProps) {
   const [currentStep, setCurrentStep] = useState<WorkflowStep>("intake")
   const [initialIdea, setInitialIdea] = useState(idea)
@@ -57,6 +77,8 @@ export default function IdeaRefinementPhase({ idea, onComplete }: IdeaRefinement
   const [frameworkProgress, setFrameworkProgress] = useState(0)
   const [curiosityQuestion, setCuriosityQuestion] = useState("")
   const [showThemeAnimation, setShowThemeAnimation] = useState(false)
+  const [combinedContext, setCombinedContext] = useState<any>(null)
+  const [coreProblem, setCoreProblem] = useState<any>(null)
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
@@ -69,87 +91,193 @@ export default function IdeaRefinementPhase({ idea, onComplete }: IdeaRefinement
   useEffect(() => {
     if (idea.trim()) {
       setInitialIdea(idea)
-      startThemeExtraction()
     }
   }, [idea])
 
-  const startThemeExtraction = () => {
-    setIsExtractingThemes(true)
+  // --- Workflow Steps ---
+  // Step 1: Intake (Themes, Context, Clarification)
+  const runIntake = async () => {
+    setIsExtractingThemes(true);
+    setIntakeProgress(10);
+    // 1a: Get Themes
+    const themesData = await callRefinementApi('get_themes', { freewriting: idea });
+    console.log("Themes data received:", themesData);
+    if (!themesData) return;
+    const themeColors = ["blue", "green", "amber", "purple", "indigo", "pink", "teal"];
+    const themesWithColors: ThemeItem[] = (themesData.themes || []).map((themeName: string, index: number) => ({
+      name: themeName,
+      color: themeColors[index % themeColors.length]
+    }));
+    setExtractedThemes(themesWithColors);
+    setIntakeProgress(30);
+    // 1b: Get Context
+    const contextData = await callRefinementApi('get_context', { freewriting: idea });
+    console.log("Context data received:", contextData);
+    if (!contextData) return;
+    setIntakeProgress(50);
+    // 1c: Get Clarification
+    const clarificationData = await callRefinementApi('get_clarification', { context_input: contextData });
+    console.log("Clarification data received:", clarificationData);
+    if (!clarificationData) return;
+    setIntakeProgress(70);
+    // 1d: Default detail answer if needed
+    let detailAnswer = "";
+    if (clarificationData?.need_more_detail) {
+      detailAnswer = "Use sender role, keywords, and explicit deadline dates to determine urgency.";
+    }
+    // Store context for later steps
+    setCombinedContext({
+      context: contextData,
+      clarification: clarificationData,
+      detail_answer: detailAnswer
+    });
+    console.log("Combined context set:", {
+      context: contextData,
+      clarification: clarificationData,
+      detail_answer: detailAnswer
+    });
+    setIntakeProgress(100);
+    setIsExtractingThemes(false);
+    setShowThemeAnimation(true);
+    setTimeout(() => setCurrentStep("pushback"), 1000);
+  };
 
-    // Simulate theme extraction progress
-    const interval = setInterval(() => {
-      setIntakeProgress((prev) => {
-        const newProgress = prev + 5
-        if (newProgress >= 100) {
-          clearInterval(interval)
-          setTimeout(() => {
-            setShowThemeAnimation(true)
-            setTimeout(() => {
-              setIsExtractingThemes(false)
-              generateThemes()
-              setTimeout(() => {
-                setCurrentStep("pushback")
-                generateInitialPushback()
-              }, 1500)
-            }, 2000)
-          }, 500)
-          return 100
-        }
-        return newProgress
-      })
-    }, 100)
-  }
+  // Step 2: Pushback & Core Problem
+  const runPushbackAndCoreProblem = async () => {
+    console.log("Running Pushback and Core Problem step...");
+    setTypingMessage("");
+    setIsTyping(true);
+    // 2a: Get Pushback
+    const pushbackData = await callRefinementApi('get_pushback', { context_input: combinedContext.context, themes: extractedThemes.map(t => t.name) });
+    console.log("Pushback data received:", pushbackData);
+    if (!pushbackData) return;
+    setInitialPushback(pushbackData.summary_of_pushback);
+    setCuriosityQuestion(pushbackData.curiosity_question);
+    setIsTyping(false);
+    // 2b: Get Core Problem
+    const coreProblemData = await callRefinementApi('get_core_problem', { context_input: combinedContext.context, clarification: combinedContext.clarification });
+    console.log("Core Problem data received:", coreProblemData);
+    if (!coreProblemData) return;
+    setCurrentStep("creativity");
+    setCoreProblem(coreProblemData);
+    setCombinedContext(prev => ({ ...prev, pushback_summary: pushbackData.summary_of_pushback, curiosity_question: pushbackData.curiosity_question, core_problem: coreProblemData }));
+  };
 
-  const generateThemes = () => {
-    const themes: ThemeItem[] = [
-      { name: "Feedback Management", color: "blue" },
-      { name: "Centralization", color: "green" },
-      { name: "Prioritization", color: "amber" },
-      { name: "Integration", color: "purple" },
-      { name: "Automation", color: "indigo" },
-    ]
-    setExtractedThemes(themes)
-  }
+  // Step 3 & 4: Creativity & Variants
+  const runCreativityAndVariants = async () => {
+    setIsGeneratingVariants(true);
+    setVariantGenerationProgress(10);
+    console.log("Starting Creativity & Variants step..."); 
 
-  const simulateTyping = (text: string, callback?: () => void) => {
-    setIsTyping(true)
-    let i = 0
-    setTypingMessage("")
+    // 3a: Creative Expansion
+    console.log("Calling get_creative_expansion..."); 
+    const creativeData = await callRefinementApi('get_creative_expansion', { core_problem: combinedContext.core_problem, combined_context: combinedContext });
+    console.log("Creative Expansion data received:", creativeData); 
+    if (!creativeData) {
+      console.error("Failed to get creative expansion data."); 
+      setIsGeneratingVariants(false); // Ensure loading stops on error
+      return;
+    }
+    // Defensive: ensure we only spread arrays, and if it's a string, treat as a single variant
+    const creativeVariantsRaw = Array.isArray(creativeData.scamper_variants)
+      ? creativeData.scamper_variants
+      : typeof creativeData.scamper_variants === 'string' && creativeData.scamper_variants.trim() !== ''
+        ? [creativeData.scamper_variants]
+        : [];
+    console.log("Creative Expansion data received:", creativeVariantsRaw); // Added log
+    setVariantGenerationProgress(30);
 
-    const typingInterval = setInterval(() => {
-      if (i < text.length) {
-        setTypingMessage((prev) => prev + text.charAt(i))
-        i++
-      } else {
-        clearInterval(typingInterval)
-        setIsTyping(false)
-        if (callback) callback()
+    // 3b: Cross-Analogs
+    console.log("Calling get_cross_analogs..."); // Added log
+    const crossData = await callRefinementApi('get_cross_analogs', { core_problem: combinedContext.core_problem, combined_context: combinedContext });
+    console.log("Cross Analogs data received:", crossData);
+    if (!crossData) {
+      console.error("Failed to get cross analogs data."); // Added log
+      setIsGeneratingVariants(false); // Ensure loading stops on error
+      return;
+    }
+    // Defensive: ensure we only spread arrays, and if it's a string, treat as a single variant
+    const crossVariantsRaw = Array.isArray(crossData.cross_industry_analogies)
+      ? crossData.cross_industry_analogies
+      : typeof crossData.cross_industry_analogies === 'string' && crossData.cross_industry_analogies.trim() !== ''
+        ? [crossData.cross_industry_analogies]
+        : [];
+    console.log("Cross Analogs data received:", crossVariantsRaw); // Added log
+    setVariantGenerationProgress(50);
+
+    // Limit the number of variants to a maximum of 6
+    const allVariantsRaw = [...creativeVariantsRaw, ...crossVariantsRaw].slice(0, 6);
+    console.log(`Processing ${allVariantsRaw.length} total raw variants...`); // Added log
+
+    // 4: For each variant, get pushback & feasibility
+    console.log("Starting to process each variant...");
+    const processedVariants: IdeaVariant[] = [];
+    for (let i = 0; i < allVariantsRaw.length; i++) {
+      const ideaContent = allVariantsRaw[i];
+      console.log(`--- Processing variant ${i + 1}/${allVariantsRaw.length}: "${ideaContent}" ---`); // Added log
+      setVariantGenerationProgress(50 + Math.round(((i + 1) / allVariantsRaw.length) * 50));
+
+      // 4a: Variant Pushback
+      console.log(`Calling get_variant_pushback for variant ${i + 1}...`); // Added log
+      const variantPushbackData = await callRefinementApi('get_variant_pushback', { idea_variant: ideaContent });
+      console.log(`Variant pushback data for variant ${i + 1}:`, variantPushbackData); 
+      if (!variantPushbackData) {
+        console.warn(`Skipping variant ${i + 1} due to pushback API failure.`); // Added log
+        continue;
       }
-    }, 15) // Adjust typing speed here
+      console.log(`Pushback data for variant ${i + 1}:`, variantPushbackData); // Added log
 
-    return () => clearInterval(typingInterval)
-  }
+      console.log("variant feasibility starting now");
+      // 4b: Variant Feasibility
+      const variantContextPayload = {
+        context: combinedContext.context,
+        clarification: combinedContext.clarification,
+        detail_answer: combinedContext.detail_answer,
+        idea_variant: ideaContent
+      };
+      console.log(`Calling get_variant_feasibility for variant ${i + 1}...`); // Added log
+      const variantFeasibilityData = await callRefinementApi('get_variant_feasibility', { idea_variant: ideaContent, variant_context: variantContextPayload });
+      console.log(`Variant feasibility data for variant ${i + 1}:`, variantFeasibilityData);
+      if (!variantFeasibilityData) {
+        console.warn(`Skipping variant ${i + 1} due to feasibility API failure.`); // Added log
+        continue;
+      }
+      console.log(`Feasibility data for variant ${i + 1}:`, variantFeasibilityData); // Added log
 
-  const generateInitialPushback = () => {
-    const pushbackMessages = [
-      `I see you're interested in creating a centralized feedback management system. This is a valuable idea, but I'd like to challenge it a bit to help strengthen it. Have you considered how you'll handle the technical complexity of integrating with so many different platforms? Each platform has its own API limitations and data structures.`,
-      `Your idea for a feedback aggregator is promising, but let's examine it critically. How will you ensure users don't feel overwhelmed by seeing all their feedback in one place? Sometimes separation helps with mental compartmentalization. Also, what's your approach to determining urgency automatically without creating false positives?`,
-      `I'd like to push back on your feedback management concept to help refine it. While centralization is valuable, it could create a single point of failure. What happens if users become dependent on your system and then it has downtime? Also, how will you handle the cold start problem of training AI to recognize what's truly important?`,
-    ]
+      // --- Framework badge diversity ---
+      let framework = "Innovative";
+      const creativeCount = creativeData?.scamper_variations?.length || 0;
+      if (i < creativeCount) {
+        const creativeFrameworks = ["Innovative", "Practical", "Collaborative"];
+        framework = creativeFrameworks[i % creativeFrameworks.length];
+      } else {
+        const crossFrameworks = ["Inspired", "Systematic", "Experimental"];
+        framework = crossFrameworks[(i - creativeCount) % crossFrameworks.length];
+      }
 
-    const randomPushback = pushbackMessages[Math.floor(Math.random() * pushbackMessages.length)]
-    setInitialPushback(randomPushback)
+      // --- Feasibility as percentage ---
+      processedVariants.push({
+        id: `variant-${i + 1}`,
+        content: ideaContent,
+        pushback: variantPushbackData.summary_of_pushback || "No specific pushback generated.",
+        feasibility: {
+          technical: Math.round((variantFeasibilityData.technical_feasibility || 0) * 10),
+          market: Math.round((variantFeasibilityData.market_feasibility || 0) * 10),
+          novelty: Math.round((variantFeasibilityData.novelty || 0) * 10),
+        },
+        risks: variantFeasibilityData.execution_risks || "N/A",
+        tags: ["AI", "Feedback", `Variant ${i + 1}`],
+        framework,
+      });
+      console.log(`Successfully processed variant ${i + 1}. Total processed: ${processedVariants.length}`); // Added log
+    }
 
-    const questions = [
-      "Have you thought about which integrations would be most critical for your initial launch?",
-      "What criteria would you use to determine the urgency or importance of feedback?",
-      "How might you balance automation with human judgment in your solution?",
-    ]
-
-    setCuriosityQuestion(questions[Math.floor(Math.random() * questions.length)])
-
-    simulateTyping(randomPushback)
-  }
+    console.log("Finished processing all variants. Processed variants:", processedVariants); // Added log
+    setIdeaVariants(processedVariants);
+    setIsGeneratingVariants(false);
+    console.log("Setting current step to 'variants'"); // Added log
+    setCurrentStep("variants");
+  };
 
   const handleUserResponseSubmit = () => {
     if (userResponse.trim() === "") {
@@ -159,131 +287,8 @@ export default function IdeaRefinementPhase({ idea, onComplete }: IdeaRefinement
     }
     setCurrentStep("creativity")
     setTimeout(() => {
-      startGeneratingVariants()
+      runCreativityAndVariants()
     }, 1000)
-  }
-
-  const startGeneratingVariants = () => {
-    setIsGeneratingVariants(true)
-    setVariantGenerationProgress(0)
-
-    // Simulate the frameworks being applied one by one
-    const frameworks = [
-      "SCAMPER",
-      "First Principles",
-      "Six Thinking Hats",
-      "Cross-Industry Analogies",
-      "Hybrid Concepts",
-    ]
-    let currentFrameworkIndex = 0
-
-    const frameworkInterval = setInterval(() => {
-      if (currentFrameworkIndex < frameworks.length) {
-        setCurrentFramework(frameworks[currentFrameworkIndex])
-        setFrameworkProgress(0)
-
-        // Simulate progress for current framework
-        const progressInterval = setInterval(() => {
-          setFrameworkProgress((prev) => {
-            const newProgress = prev + 10
-            if (newProgress >= 100) {
-              clearInterval(progressInterval)
-              currentFrameworkIndex++
-              return 100
-            }
-            return newProgress
-          })
-        }, 200)
-
-        // Update overall progress
-        setVariantGenerationProgress((prev) => Math.min(100, prev + 20))
-      } else {
-        clearInterval(frameworkInterval)
-        setTimeout(() => {
-          generateVariants()
-        }, 1000)
-      }
-    }, 3000)
-  }
-
-  // Replace the generateVariants function with this updated version that uses more user-friendly approach labels
-  const generateVariants = () => {
-    const variants: IdeaVariant[] = [
-      {
-        id: "variant-1",
-        content:
-          "A browser extension that automatically captures feedback from multiple platforms and centralizes it in a smart inbox with AI-powered prioritization",
-        pushback: "Browser extensions have limited capabilities on mobile devices",
-        feasibility: {
-          technical: 85,
-          market: 90,
-          novelty: 75,
-        },
-        risks: "API rate limits, browser compatibility issues, and maintaining updates across browser versions",
-        tags: ["browser-extension", "ai-prioritization", "cross-platform"],
-        framework: "Innovative", // Changed from "SCAMPER"
-      },
-      {
-        id: "variant-2",
-        content:
-          "A dedicated email address that users can forward or BCC feedback to, which then uses NLP to categorize, tag, and prioritize before presenting in a dashboard",
-        pushback: "Email-based solutions can feel disconnected from the original context",
-        feasibility: {
-          technical: 90,
-          market: 80,
-          novelty: 65,
-        },
-        risks: "Email deliverability issues, handling of attachments and formatting, spam filtering",
-        tags: ["email-based", "nlp", "dashboard"],
-        framework: "Practical", // Changed from "First Principles"
-      },
-      {
-        id: "variant-3",
-        content:
-          "A Slack bot that can be invited to channels and DMs, which monitors for feedback patterns and creates a structured database with reminders and follow-ups",
-        pushback: "Slack bots can be perceived as intrusive if not well-designed",
-        feasibility: {
-          technical: 80,
-          market: 85,
-          novelty: 70,
-        },
-        risks: "Slack API limitations, privacy concerns, maintaining context across conversations",
-        tags: ["slack-bot", "reminders", "structured-database"],
-        framework: "Collaborative", // Changed from "Six Thinking Hats"
-      },
-      {
-        id: "variant-4",
-        content:
-          "A universal feedback inbox inspired by email clients, but with smart filters, automated tagging, and integration with task management systems",
-        pushback: "Universal inboxes can become overwhelming without proper organization",
-        feasibility: {
-          technical: 75,
-          market: 95,
-          novelty: 80,
-        },
-        risks: "Integration complexity, user adoption, competing with established tools",
-        tags: ["universal-inbox", "smart-filters", "task-integration"],
-        framework: "Inspired", // Changed from "Cross-Industry Analogies"
-      },
-      {
-        id: "variant-5",
-        content:
-          "A feedback CRM that treats each piece of feedback like a lead, with pipelines for triage, evaluation, implementation, and follow-up",
-        pushback: "CRM systems can be complex and require training for effective use",
-        feasibility: {
-          technical: 85,
-          market: 85,
-          novelty: 85,
-        },
-        risks: "Complexity vs. simplicity balance, CRM feature bloat, adoption barriers",
-        tags: ["feedback-crm", "pipeline", "follow-up"],
-        framework: "Systematic", // Changed from "Hybrid Concepts"
-      },
-    ]
-
-    setIdeaVariants(variants)
-    setIsGeneratingVariants(false)
-    setCurrentStep("variants")
   }
 
   const handleSelectVariant = (variantId: string) => {
@@ -298,7 +303,7 @@ export default function IdeaRefinementPhase({ idea, onComplete }: IdeaRefinement
   const handleContinue = () => {
     const selected = ideaVariants.find((v) => v.id === selectedVariant)
     if (selected) {
-      onComplete(selected.content)
+      onComplete(selected.content, combinedContext) // Pass combinedContext here
     }
   }
 
@@ -313,7 +318,6 @@ export default function IdeaRefinementPhase({ idea, onComplete }: IdeaRefinement
     return steps[currentStep]
   }
 
-  // Replace the getFrameworkColor function with this updated version
   const getFrameworkColor = (framework: string) => {
     switch (framework) {
       case "Innovative":
@@ -326,6 +330,8 @@ export default function IdeaRefinementPhase({ idea, onComplete }: IdeaRefinement
         return "text-purple-600 bg-purple-50 border-purple-200"
       case "Systematic":
         return "text-indigo-600 bg-indigo-50 border-indigo-200"
+      case "Experimental":
+        return "text-pink-600 bg-pink-50 border-pink-200"
       default:
         return "text-gray-600 bg-gray-50 border-gray-200"
     }
@@ -598,6 +604,7 @@ export default function IdeaRefinementPhase({ idea, onComplete }: IdeaRefinement
 
       case "variants":
       case "selection":
+        console.log("Rendering Variants/Selection step with variants:", ideaVariants); // Added log
         return (
           <div className="space-y-4">
             <div className="bg-white p-6 rounded-lg border shadow-sm">
@@ -626,12 +633,6 @@ export default function IdeaRefinementPhase({ idea, onComplete }: IdeaRefinement
                 </Tabs>
               </div>
 
-              {/* Update the solution variant cards in the renderStepContent function */}
-              {/* Find the section in the case "variants": or case "selection": that renders the variant cards */}
-              {/* Replace the variant card rendering with this improved version: */}
-
-              {/* Find this section in the renderStepContent function under case "variants": or case "selection": */}
-              {/* Look for the grid with ideaVariants.map and replace that entire grid with this: */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
                 {ideaVariants
                   .filter((variant) => {
@@ -665,7 +666,9 @@ export default function IdeaRefinementPhase({ idea, onComplete }: IdeaRefinement
                                   ? "bg-amber-500"
                                   : getFrameworkColor(variant.framework).includes("purple")
                                     ? "bg-purple-500"
-                                    : "bg-indigo-500",
+                                    : getFrameworkColor(variant.framework).includes("pink")
+                                      ? "bg-pink-500"
+                                      : "bg-indigo-500",
                         )}
                       ></div>
                       <div className="p-5">
@@ -778,6 +781,17 @@ export default function IdeaRefinementPhase({ idea, onComplete }: IdeaRefinement
         return null
     }
   }
+
+  // useEffect to trigger steps
+  useEffect(() => {
+    if (currentStep === "intake" && idea.trim()) {
+      runIntake();
+    } else if (currentStep === "pushback") {
+      runPushbackAndCoreProblem();
+    } else if (currentStep === "creativity") {
+      runCreativityAndVariants();
+    }
+  }, [currentStep, idea]);
 
   return (
     <Card className="w-full shadow-xl border-t-4 border-t-primary animate-fade-in relative overflow-hidden">
